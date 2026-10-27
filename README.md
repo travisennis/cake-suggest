@@ -186,6 +186,17 @@ just ci             # fmt-check, vet, test, build
 Tests use a fake Cake process for both replay and the model call. They require
 no real Cake binary and no model call.
 
+## Verified
+
+- `just ci` and `go test -race ./...` pass.
+- Against a real Cake build, replay of a 487-entry session parsed into a
+  20,100-character excerpt, and one real suggestion call returned a valid
+  one-document result (6,686 input / 245 output tokens, about 4.1 seconds).
+- Driven cake-repl in a 100x30 tmux pane against the checked-in fake cake and
+  this real binary: the ghost `Add a focused test for the fake path.` appeared
+  with the `Ctrl+S use suggestion` hint, and `Ctrl+S` submitted it as a `YOU`
+  row.
+
 ## Related
 
 - [ADR 001](docs/adr/001-suggest-through-replay-and-an-isolated-cake-call.md):
