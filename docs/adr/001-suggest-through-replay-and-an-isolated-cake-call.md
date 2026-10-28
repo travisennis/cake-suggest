@@ -65,7 +65,8 @@ isolated Cake completion over a bounded excerpt.
 
    ```sh
    cake --no-session --no-tools --no-skills --output-format json \
-     --system-prompt <temp> --output-schema <temp> [-model ...] [-profile ...] -
+     --system-prompt <temp> --output-schema <temp> \
+     [-model ...] [-profile ...] [-reasoning-effort ...] -
    ```
 
    The transcript is on stdin. The system prompt treats it as untrusted data,
@@ -104,3 +105,6 @@ isolated Cake completion over a bounded excerpt.
   and completion JSON.
 - Cake's own `docs/integrations.md` "Session replay" section says replay is
   read-only and preserves record order; this tool relies on that contract.
+- `-reasoning-effort` was added on 2026-10-28 as an optional pass-through for
+  the isolated completion. It changes no boundary: an empty value omits the
+  flag, and Cake validates the allowed values.

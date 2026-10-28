@@ -35,9 +35,11 @@ type Options struct {
 	DataDir string
 	// SessionID is the session to read.
 	SessionID string
-	// Model and Profile are passed to the suggestion model call when set.
-	Model   string
-	Profile string
+	// Model, Profile, and ReasoningEffort are passed to the suggestion model
+	// call when set. An empty value omits the corresponding Cake flag.
+	Model           string
+	Profile         string
+	ReasoningEffort string
 	// MaxTranscriptChars bounds the conversation excerpt.
 	MaxTranscriptChars int
 	// MaxReplayBytes bounds the replay stream read from Cake.
@@ -115,12 +117,13 @@ func Run(ctx context.Context, options Options) (Result, error) {
 
 	modelStart := time.Now()
 	raw, usage, err := cakecli.Suggest(ctx, cakecli.ModelOptions{
-		Binary:       binary,
-		Model:        options.Model,
-		Profile:      options.Profile,
-		SystemPrompt: BuildSystemPrompt(),
-		OutputSchema: OutputSchema(),
-		Transcript:   view.Text + "\n\n---\n\nEND OF TRANSCRIPT\n\nReturn the structured suggestion now.\n",
+		Binary:          binary,
+		Model:           options.Model,
+		Profile:         options.Profile,
+		ReasoningEffort: options.ReasoningEffort,
+		SystemPrompt:    BuildSystemPrompt(),
+		OutputSchema:    OutputSchema(),
+		Transcript:      view.Text + "\n\n---\n\nEND OF TRANSCRIPT\n\nReturn the structured suggestion now.\n",
 	})
 	result.ModelElapsed = time.Since(modelStart)
 	result.Usage = usage

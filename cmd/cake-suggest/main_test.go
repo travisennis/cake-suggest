@@ -228,6 +228,7 @@ func TestSuggestJSONUsesReplayAndModel(t *testing.T) {
 			"-data-dir", temp,
 			"-model", "test-model",
 			"-profile", "concise",
+			"-reasoning-effort", "high",
 			"--", testID,
 		})
 	})
@@ -247,7 +248,8 @@ func TestSuggestJSONUsesReplayAndModel(t *testing.T) {
 	for _, want := range []string{
 		"--no-session", "--no-tools", "--no-skills",
 		"--output-format\njson", "--system-prompt", "--output-schema",
-		"--model\ntest-model", "--profile\nconcise", "\n-",
+		"--model\ntest-model", "--profile\nconcise",
+		"--reasoning-effort\nhigh", "\n-",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("model args do not contain %q:\n%s", want, args)
@@ -286,6 +288,8 @@ func TestSuggestJSONUsesReplayAndModel(t *testing.T) {
 func TestSuggestNoOp(t *testing.T) {
 	fake := writeFakeCake(t)
 	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture()))
+	argsPath := filepath.Join(t.TempDir(), "model-args")
+	t.Setenv("FAKE_ARGS_FILE", argsPath)
 	documentEnv(t, map[string]any{
 		"suggested": false,
 		"reason":    "The work is complete.",
@@ -303,6 +307,9 @@ func TestSuggestNoOp(t *testing.T) {
 	}
 	if doc.Suggested || doc.Reason != "The work is complete." || doc.SessionID != testID {
 		t.Fatalf("unexpected document: %+v", doc)
+	}
+	if args := readFile(t, argsPath); strings.Contains(args, "--reasoning-effort") {
+		t.Errorf("empty reasoning effort emitted a flag:\n%s", args)
 	}
 }
 

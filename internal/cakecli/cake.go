@@ -138,12 +138,13 @@ type Completion struct {
 
 // ModelOptions describes one isolated suggestion model call.
 type ModelOptions struct {
-	Binary       string
-	Model        string
-	Profile      string
-	SystemPrompt string
-	OutputSchema string
-	Transcript   string
+	Binary          string
+	Model           string
+	Profile         string
+	ReasoningEffort string
+	SystemPrompt    string
+	OutputSchema    string
+	Transcript      string
 }
 
 // Suggest asks a tool-less, session-less Cake invocation for a suggestion.
@@ -187,6 +188,9 @@ func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
 	}
 	if options.Profile != "" {
 		args = append(args, "--profile", options.Profile)
+	}
+	if options.ReasoningEffort != "" {
+		args = append(args, "--reasoning-effort", options.ReasoningEffort)
 	}
 	args = append(args, "-")
 

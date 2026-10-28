@@ -71,6 +71,7 @@ Flags:
   -data-dir <path>             cake data root (default: $CAKE_DATA_DIR or ~/.local/share/cake)
   -model <name>                model for the suggestion call
   -profile <name>              profile for the suggestion call
+  -reasoning-effort <effort>   reasoning effort (none, low, medium, high, xhigh, max)
   -timeout <duration>          whole-request deadline (default 50s)
   -max-transcript-chars <n>    transcript excerpt bound (default 20000)
   -max-replay-bytes <n>        replay stream bound (default 67108864)
@@ -88,7 +89,7 @@ Exit codes:
 
 Examples:
   cake-suggest suggest -json -- 01234567-89ab-4cde-8f01-23456789abcd
-  cake-suggest suggest -model fast -profile concise -json -- <session-id>
+  cake-suggest suggest -model fast -profile concise -reasoning-effort low -json -- <session-id>
 `)
 }
 
@@ -96,20 +97,22 @@ func commandSuggest(args []string) int {
 	fs := flag.NewFlagSet("suggest", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var (
-		cakeBin        string
-		dataDir        string
-		model          string
-		profile        string
-		timeout        time.Duration
-		maxTranscript  int
-		maxReplayBytes int64
-		jsonOut        bool
-		verbose        bool
+		cakeBin         string
+		dataDir         string
+		model           string
+		profile         string
+		reasoningEffort string
+		timeout         time.Duration
+		maxTranscript   int
+		maxReplayBytes  int64
+		jsonOut         bool
+		verbose         bool
 	)
 	fs.StringVar(&cakeBin, "cake-bin", "", "cake executable")
 	fs.StringVar(&dataDir, "data-dir", "", "cake data root")
 	fs.StringVar(&model, "model", "", "model for the suggestion call")
 	fs.StringVar(&profile, "profile", "", "profile for the suggestion call")
+	fs.StringVar(&reasoningEffort, "reasoning-effort", "", "reasoning effort for the suggestion call")
 	fs.DurationVar(&timeout, "timeout", defaultTimeout, "whole-request deadline")
 	fs.IntVar(&maxTranscript, "max-transcript-chars", 20_000, "transcript excerpt bound")
 	fs.Int64Var(&maxReplayBytes, "max-replay-bytes", defaultReplayBytes, "replay stream bound")
@@ -151,6 +154,7 @@ func commandSuggest(args []string) int {
 		SessionID:          sessionID,
 		Model:              model,
 		Profile:            profile,
+		ReasoningEffort:    reasoningEffort,
 		MaxTranscriptChars: maxTranscript,
 		MaxReplayBytes:     maxReplayBytes,
 	})

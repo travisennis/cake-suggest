@@ -17,8 +17,8 @@ the composer.
   - `cake --output-format stream-json replay <uuid>`
   - `--output-schema` on a normal Cake run
 - Go 1.25 or newer to build.
-- A model/profile configured for Cake. The suggestion call uses the `-model`
-  and `-profile` it is given, or Cake's defaults.
+- A model/profile configured for Cake. The suggestion call uses the `-model`,
+  `-profile`, and `-reasoning-effort` it is given, or Cake's defaults.
 
 `cake-suggest` checks neither capability up front. A replay that Cake rejects
 or a model call that Cake rejects is reported on stderr with a nonzero exit.
@@ -28,7 +28,8 @@ or a model call that Cake rejects is reported on stderr with a nonzero exit.
 cake-repl invokes exactly:
 
 ```sh
-cake-suggest suggest -json [-cake-bin <path>] [-model <name>] [-profile <name>] -- <session-id>
+cake-suggest suggest -json [-cake-bin <path>] [-model <name>] [-profile <name>]
+  [-reasoning-effort <effort>] -- <session-id>
 ```
 
 The session argument follows `--` so it is never parsed as a flag. Every
@@ -68,7 +69,8 @@ stderr.
 
    ```sh
    cake --no-session --no-tools --no-skills --output-format json \
-     --system-prompt <temp> --output-schema <temp> [-model ...] [-profile ...] -
+     --system-prompt <temp> --output-schema <temp> \
+     [-model ...] [-profile ...] [-reasoning-effort ...] -
    ```
 
    The transcript is on stdin. The temporary data root means the call cannot
@@ -104,9 +106,9 @@ cake-suggest suggest -json -- 01234567-89ab-4cde-8f01-23456789abcd
 # Human-readable output.
 cake-suggest suggest -- 01234567-89ab-4cde-8f01-23456789abcd
 
-# Use a specific model/profile and show content-free timing/cost diagnostics.
+# Use a specific model/profile/effort and show content-free timing/cost diagnostics.
 cake-suggest suggest -json -verbose \
-  -model fast -profile concise -- <session-id>
+  -model fast -profile concise -reasoning-effort low -- <session-id>
 
 # Point at a different Cake build or data root.
 cake-suggest suggest -json -cake-bin /path/to/cake \
@@ -136,6 +138,7 @@ binary. `-no-session` disables them.
 | `-data-dir <path>` | Cake data root for replay. Default `$CAKE_DATA_DIR`, then `~/.local/share/cake`. |
 | `-model <name>` | Model for the suggestion call. Empty uses Cake's default. |
 | `-profile <name>` | Profile for the suggestion call. Empty omits the flag. |
+| `-reasoning-effort <effort>` | Reasoning effort for the suggestion call: `none`, `low`, `medium`, `high`, `xhigh`, or `max`. Empty omits the flag. |
 | `-timeout <duration>` | Whole-request deadline, including replay and the model call. Default `50s`. cake-repl allows 60s. |
 | `-max-transcript-chars <n>` | Transcript excerpt bound. Default `20000`; raise it for a session that needs more context. |
 | `-max-replay-bytes <n>` | Replay stream bound. Default `67108864` (64 MiB). |
@@ -163,7 +166,7 @@ binary. `-no-session` disables them.
   session would supply.
 - The suggestion call is metered after every completed turn. The default
   transcript bound keeps it small, but cost still depends on the selected
-  model and profile.
+  model, profile, and reasoning effort.
 - Model suggestion quality is not evaluated here. The project proves the
   contract, the bounded subprocess behavior, and the document shape; it does
   not claim that suggestions are useful for every session.

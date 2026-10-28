@@ -13,8 +13,9 @@ an existing Cake session. It is the external suggester behind cake-repl's
   JSONL files, parse Cake human output, or import Cake internals.
 - Ask the model only through one isolated Cake invocation:
   `--no-session --no-tools --no-skills --output-format json --system-prompt
-  <temp> --output-schema <temp> [-model ...] [-profile ...] -`, in a temporary
-  working directory and a temporary `CAKE_DATA_DIR`.
+  <temp> --output-schema <temp> [-model ...] [-profile ...]
+  [-reasoning-effort ...] -`, in a temporary working directory and a temporary
+  `CAKE_DATA_DIR`.
 - Never resume, fork, or write the session. A suggestion is read-only.
 - The stdout contract is one JSON document:
   `{"suggested":bool,"suggestion":string,"session_id":string,"reason":string}`.
