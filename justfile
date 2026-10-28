@@ -7,6 +7,9 @@ build:
     mkdir -p bin
     go build -trimpath -o bin/cake-suggest ./cmd/cake-suggest
 
+version-check: build
+    ./bin/cake-suggest -version | grep -q '^revision '
+
 install:
     go install -trimpath ./cmd/cake-suggest
 
@@ -25,4 +28,4 @@ fmt-check:
 vet:
     go vet ./...
 
-ci: fmt-check vet test build
+ci: fmt-check vet test build version-check

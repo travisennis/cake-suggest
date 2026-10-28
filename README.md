@@ -143,7 +143,8 @@ time 2026-10-28T18:45:10Z
 
 The revision comes from Go's embedded build information. After `just install`,
 this output shows which commit produced the installed binary; a dirty worktree
-is marked `(modified)`.
+is marked `(modified)`. `just ci` builds the binary and asserts that its version
+output contains a revision line.
 
 ## Flags
 
@@ -199,7 +200,7 @@ just install        # go install ./cmd/cake-suggest
 cake-suggest -version  # confirm the installed revision
 just test
 just test-race
-just ci             # fmt-check, vet, test, build
+just ci             # fmt-check, vet, test, build, revision check
 ```
 
 Tests use a fake Cake process for both replay and the model call. They require
