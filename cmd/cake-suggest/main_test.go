@@ -430,11 +430,18 @@ func TestSuggestRequiresOneValidSessionID(t *testing.T) {
 }
 
 func TestUsageAndVersion(t *testing.T) {
-	code, stdout, stderr := captureOutput(t, func() int { return runCLI([]string{"version"}) })
-	if code != 0 || !strings.Contains(stdout, "cake-suggest 0.1.0") {
-		t.Fatalf("version: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	for _, arg := range []string{"version", "-version", "-V", "--version"} {
+		t.Run(arg, func(t *testing.T) {
+			code, stdout, stderr := captureOutput(t, func() int { return runCLI([]string{arg}) })
+			if code != 0 || !strings.HasPrefix(stdout, "cake-suggest 0.1.0") {
+				t.Fatalf("version: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if stderr != "" {
+				t.Fatalf("version wrote stderr: %q", stderr)
+			}
+		})
 	}
-	code, stdout, stderr = captureOutput(t, func() int { return runCLI([]string{"help"}) })
+	code, stdout, stderr := captureOutput(t, func() int { return runCLI([]string{"help"}) })
 	if code != 0 || stdout != "" || !strings.Contains(stderr, "Usage:") {
 		t.Fatalf("help: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}

@@ -130,6 +130,21 @@ Prompt suggestions are off by default. The automatically loaded project-local
 `.cake-repl.toml` may only disable them; it cannot enable them or choose the
 binary. `-no-session` disables them.
 
+## Version
+
+`cake-suggest -version` (also `version`, `-V`, and `--version`) prints the
+binary version followed by the embedded VCS revision and commit time:
+
+```text
+cake-suggest 0.1.0
+revision 92510da...
+time 2026-10-28T18:45:10Z
+```
+
+The revision comes from Go's embedded build information. After `just install`,
+this output shows which commit produced the installed binary; a dirty worktree
+is marked `(modified)`.
+
 ## Flags
 
 | Flag | Meaning |
@@ -181,6 +196,7 @@ binary. `-no-session` disables them.
 ```sh
 just build          # bin/cake-suggest
 just install        # go install ./cmd/cake-suggest
+cake-suggest -version  # confirm the installed revision
 just test
 just test-race
 just ci             # fmt-check, vet, test, build

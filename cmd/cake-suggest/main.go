@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/travisennis/cake-suggest/internal/suggest"
+	"github.com/travisennis/cake-suggest/internal/version"
 )
 
 const (
-	version            = "0.1.0"
 	defaultTimeout     = 50 * time.Second
 	defaultReplayBytes = 64 << 20
 )
@@ -46,8 +46,8 @@ func runCLI(args []string) int {
 	case "help", "-h", "--help":
 		usage()
 		return 0
-	case "version", "-V", "--version":
-		fmt.Printf("cake-suggest %s\n", version)
+	case "version", "-version", "-V", "--version":
+		fmt.Println(version.Text())
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
@@ -61,6 +61,8 @@ func usage() {
 
 Usage:
   cake-suggest suggest [flags] -- <session-id>
+  cake-suggest version | -version | -V | --version
+  cake-suggest help | -h | --help
 
 The session is read through Cake's read-only replay stream. The suggestion is
 one isolated, tool-less, session-less Cake model call. Nothing is written to
@@ -86,6 +88,11 @@ Exit codes:
   0  a suggestion or a deliberate no-op
   1  replay, model, or output failure
   2  invalid usage
+
+Version output:
+  cake-suggest 0.1.0
+  revision <commit>
+  time <commit-time>
 
 Examples:
   cake-suggest suggest -json -- 01234567-89ab-4cde-8f01-23456789abcd
