@@ -29,6 +29,7 @@ an existing Cake session. It is the external suggester behind cake-repl's
 `justfile` is the authority:
 
 ```sh
+just hooks
 just test
 just test-race
 just ci

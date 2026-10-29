@@ -195,6 +195,7 @@ output contains a revision line.
 ## Build and test
 
 ```sh
+just hooks          # install the commit-msg hook (Conventional Commits)
 just build          # bin/cake-suggest
 just install        # go install ./cmd/cake-suggest
 cake-suggest -version  # confirm the installed revision
