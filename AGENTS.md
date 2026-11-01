@@ -39,6 +39,17 @@ just build
 Tests must not require a real Cake binary or a model call. Use the fake Cake
 helper.
 
+## Workflow
+
+- `ahm` owns the backlog (`.ahm/config.json` points at the home store). Run
+  `ahm prime` at the start of work, and create or select a task before
+  implementation: `ahm task accept <id>`, `ahm task start <id>`, then
+  `ahm task complete <id>`.
+- Do not keep a `TODO.md`. Future work, open questions, and follow-ups belong
+  in ahm tasks.
+- Use Conventional Commits; `just hooks` installs the commit-msg hook.
+- Run `just ci` before calling a change complete.
+
 ## Documentation
 
 Keep `README.md`, `cmd/cake-suggest/main.go` usage text, and the ADRs in sync
