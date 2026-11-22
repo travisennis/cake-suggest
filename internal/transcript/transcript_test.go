@@ -61,6 +61,28 @@ func TestParseBuildsTheConversation(t *testing.T) {
 	}
 }
 
+func TestParseToleratesCompactionModelObject(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"session_meta","format_version":4,"session_id":"` + testSessionID + `","working_directory":"/tmp/project","model":"test-model","model_config":"test-config"}`,
+		`{"type":"compaction","checkpoint_version":1,"checkpoint_id":"checkpoint-1","session_id":"` + testSessionID + `","summary":"Earlier work added the retry configuration.","model":{"model":"test-model","model_config":"test-config"},"summary_usage":{"input_tokens":100},"summary_time_ms":10}`,
+		`{"type":"message","role":"user","content":"Now document it."}`,
+	}, "\n") + "\n"
+
+	got, err := Parse([]byte(stream), testSessionID, 100_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "test-model" || got.ModelConfig != "test-config" {
+		t.Fatalf("Model = %q, ModelConfig = %q", got.Model, got.ModelConfig)
+	}
+	if !strings.Contains(got.Text, "HISTORICAL SUMMARY:\nEarlier work added the retry configuration.") {
+		t.Fatalf("compaction summary is missing:\n%s", got.Text)
+	}
+	if !strings.Contains(got.Text, "USER:\nNow document it.") {
+		t.Fatalf("message after compaction is missing:\n%s", got.Text)
+	}
+}
+
 func TestParseRejectsAnotherSession(t *testing.T) {
 	other := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	_, err := Parse([]byte(fixture()), other, 100_000)

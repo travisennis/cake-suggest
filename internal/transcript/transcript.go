@@ -39,20 +39,26 @@ type Transcript struct {
 }
 
 type record struct {
-	Type             string          `json:"type"`
-	SessionID        string          `json:"session_id"`
-	WorkingDirectory string          `json:"working_directory"`
-	Model            string          `json:"model"`
-	ModelConfig      string          `json:"model_config"`
-	Role             string          `json:"role"`
-	Content          json.RawMessage `json:"content"`
-	Name             string          `json:"name"`
-	Arguments        string          `json:"arguments"`
-	Output           string          `json:"output"`
-	Summary          json.RawMessage `json:"summary"`
-	Kind             string          `json:"kind"`
-	Error            string          `json:"error"`
-	ExitCode         int             `json:"exit_code"`
+	Type      string          `json:"type"`
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	Name      string          `json:"name"`
+	Arguments string          `json:"arguments"`
+	Output    string          `json:"output"`
+	Summary   json.RawMessage `json:"summary"`
+	Kind      string          `json:"kind"`
+	Error     string          `json:"error"`
+}
+
+// sessionMeta is decoded only for session_meta records. Replay records are
+// type-specific: other types, such as compaction checkpoints, carry their own
+// model objects under the same key, so session metadata must not live on the
+// shared record struct.
+type sessionMeta struct {
+	SessionID        string `json:"session_id"`
+	WorkingDirectory string `json:"working_directory"`
+	Model            string `json:"model"`
+	ModelConfig      string `json:"model_config"`
 }
 
 type entry struct {
@@ -82,23 +88,27 @@ func Parse(data []byte, wantSessionID string, maxChars int) (Transcript, error) 
 				return Transcript{}, fmt.Errorf("replay line %d: invalid JSON: %w", lineNo, err)
 			}
 			if rec.Type == "session_meta" {
-				if rec.SessionID == "" {
+				var meta sessionMeta
+				if err := json.Unmarshal([]byte(trimmed), &meta); err != nil {
+					return Transcript{}, fmt.Errorf("replay line %d: invalid session_meta: %w", lineNo, err)
+				}
+				if meta.SessionID == "" {
 					return Transcript{}, fmt.Errorf("replay line %d: session_meta has no session_id", lineNo)
 				}
-				if wantSessionID != "" && rec.SessionID != wantSessionID {
+				if wantSessionID != "" && meta.SessionID != wantSessionID {
 					return Transcript{}, fmt.Errorf(
 						"replay returned session %s, not the requested %s",
-						rec.SessionID, wantSessionID,
+						meta.SessionID, wantSessionID,
 					)
 				}
-				if sawMeta && rec.SessionID != result.SessionID {
+				if sawMeta && meta.SessionID != result.SessionID {
 					return Transcript{}, fmt.Errorf("replay contains more than one session identity")
 				}
 				sawMeta = true
-				result.SessionID = rec.SessionID
-				result.WorkingDirectory = rec.WorkingDirectory
-				result.Model = rec.Model
-				result.ModelConfig = rec.ModelConfig
+				result.SessionID = meta.SessionID
+				result.WorkingDirectory = meta.WorkingDirectory
+				result.Model = meta.Model
+				result.ModelConfig = meta.ModelConfig
 			} else {
 				block, ok, err := blockFor(rec)
 				if err != nil {
