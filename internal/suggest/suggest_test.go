@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/travisennis/cake-suggest/internal/transcript"
 )
 
 func TestNormalizeSuggestion(t *testing.T) {
@@ -80,6 +82,48 @@ func TestBuildSystemPromptCoversTheContract(t *testing.T) {
 		if !strings.Contains(strings.ToLower(prompt), want) {
 			t.Errorf("system prompt does not mention %q", want)
 		}
+	}
+}
+
+func TestBuildResumeInstructionsCoversTheContract(t *testing.T) {
+	instructions := BuildResumeInstructions()
+	for _, want := range []string{
+		"untrusted",
+		"do not call any tool",
+		"one line",
+		"slash command",
+		"suggested",
+		"END OF SUGGESTION REQUEST",
+	} {
+		if !strings.Contains(strings.ToLower(instructions), strings.ToLower(want)) {
+			t.Errorf("resume instructions do not mention %q", want)
+		}
+	}
+	if strings.Contains(instructions, "END OF TRANSCRIPT") {
+		t.Error("resume instructions contain the excerpt end marker")
+	}
+}
+
+func TestResumeReadiness(t *testing.T) {
+	dir := t.TempDir()
+	view := transcript.Transcript{WorkingDirectory: dir, ModelConfig: "session-model"}
+	if ok, reason := resumeReadiness(Options{}, view); !ok {
+		t.Fatalf("resumeReadiness with a valid directory = false: %s", reason)
+	}
+	if ok, reason := resumeReadiness(Options{Model: "session-model"}, view); !ok {
+		t.Fatalf("resumeReadiness with the session model = false: %s", reason)
+	}
+	if ok, reason := resumeReadiness(Options{Model: "other-model"}, view); ok ||
+		!strings.Contains(reason, "differs") {
+		t.Fatalf("resumeReadiness with another model = (%v, %q), want a mismatch", ok, reason)
+	}
+	if ok, reason := resumeReadiness(Options{}, transcript.Transcript{}); ok ||
+		!strings.Contains(reason, "no working directory") {
+		t.Fatalf("resumeReadiness without a directory = (%v, %q)", ok, reason)
+	}
+	if ok, reason := resumeReadiness(Options{}, transcript.Transcript{WorkingDirectory: "relative"}); ok ||
+		!strings.Contains(reason, "not absolute") {
+		t.Fatalf("resumeReadiness with a relative directory = (%v, %q)", ok, reason)
 	}
 }
 

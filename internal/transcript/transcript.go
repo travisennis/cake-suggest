@@ -1,5 +1,6 @@
-// Package transcript turns Cake's read-only replay stream into the bounded
-// conversation excerpt a suggester model reads.
+// Package transcript turns Cake's read-only replay stream into session
+// metadata and the bounded conversation excerpt a fallback suggester model
+// reads.
 //
 // It consumes only the documented stream-json record vocabulary. Audit and
 // lifecycle records are ignored; message, tool-call, tool-result, and
@@ -30,6 +31,8 @@ const (
 type Transcript struct {
 	SessionID        string
 	WorkingDirectory string
+	Model            string
+	ModelConfig      string
 	Text             string
 	Entries          int
 	Omitted          int
@@ -39,6 +42,8 @@ type record struct {
 	Type             string          `json:"type"`
 	SessionID        string          `json:"session_id"`
 	WorkingDirectory string          `json:"working_directory"`
+	Model            string          `json:"model"`
+	ModelConfig      string          `json:"model_config"`
 	Role             string          `json:"role"`
 	Content          json.RawMessage `json:"content"`
 	Name             string          `json:"name"`
@@ -92,6 +97,8 @@ func Parse(data []byte, wantSessionID string, maxChars int) (Transcript, error) 
 				sawMeta = true
 				result.SessionID = rec.SessionID
 				result.WorkingDirectory = rec.WorkingDirectory
+				result.Model = rec.Model
+				result.ModelConfig = rec.ModelConfig
 			} else {
 				block, ok, err := blockFor(rec)
 				if err != nil {

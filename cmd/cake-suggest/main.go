@@ -1,10 +1,12 @@
 // Command cake-suggest proposes the next user prompt for an existing Cake
 // session.
 //
-// It reads the session through Cake's read-only replay stream, builds a
-// bounded conversation excerpt, and asks one isolated, tool-less Cake model
-// call for a single JSON suggestion. It never writes to the session and never
-// reads Cake session files.
+// It reads the session metadata through Cake's read-only replay stream and
+// asks Cake to resume the session read-only for the suggestion, so the model
+// sees the full conversation without appending a turn. When that call cannot
+// run, it falls back to one isolated, tool-less Cake model call over a bounded
+// transcript excerpt. It never writes to the session and never reads Cake
+// session files.
 package main
 
 import (
@@ -64,9 +66,11 @@ Usage:
   cake-suggest version | -version | -V | --version
   cake-suggest help | -h | --help
 
-The session is read through Cake's read-only replay stream. The suggestion is
-one isolated, tool-less, session-less Cake model call. Nothing is written to
-the session.
+The session is read through Cake's read-only replay stream. The suggestion
+call resumes the session read-only with tool choice none in the session's
+working directory, so the model sees the full stored conversation. If that
+call cannot run, a bounded replay excerpt is used instead. Nothing is written
+to the session.
 
 Flags:
   -cake-bin <path>             cake executable (default: $CAKE_BIN or cake)
@@ -75,7 +79,7 @@ Flags:
   -profile <name>              profile for the suggestion call
   -reasoning-effort <effort>   reasoning effort (none, low, medium, high, xhigh, max)
   -timeout <duration>          whole-request deadline (default 50s)
-  -max-transcript-chars <n>    transcript excerpt bound (default 20000)
+  -max-transcript-chars <n>    fallback transcript excerpt bound (default 20000)
   -max-replay-bytes <n>        replay stream bound (default 67108864)
   -json                        emit one JSON document
   -verbose                     print content-free timings and usage on stderr
@@ -121,7 +125,7 @@ func commandSuggest(args []string) int {
 	fs.StringVar(&profile, "profile", "", "profile for the suggestion call")
 	fs.StringVar(&reasoningEffort, "reasoning-effort", "", "reasoning effort for the suggestion call")
 	fs.DurationVar(&timeout, "timeout", defaultTimeout, "whole-request deadline")
-	fs.IntVar(&maxTranscript, "max-transcript-chars", 20_000, "transcript excerpt bound")
+	fs.IntVar(&maxTranscript, "max-transcript-chars", 20_000, "fallback transcript excerpt bound")
 	fs.Int64Var(&maxReplayBytes, "max-replay-bytes", defaultReplayBytes, "replay stream bound")
 	fs.BoolVar(&jsonOut, "json", false, "emit one JSON document")
 	fs.BoolVar(&verbose, "verbose", false, "print timings and usage on stderr")
@@ -172,7 +176,8 @@ func commandSuggest(args []string) int {
 
 	if verbose {
 		fmt.Fprintf(os.Stderr,
-			"cake-suggest: entries=%d chars=%d omitted=%d replay_ms=%d model_ms=%d tokens_in=%d tokens_out=%d\n",
+			"cake-suggest: mode=%s entries=%d chars=%d omitted=%d replay_ms=%d model_ms=%d tokens_in=%d tokens_out=%d\n",
+			result.Mode,
 			result.TranscriptEntries,
 			result.TranscriptChars,
 			result.OmittedEntries,
@@ -181,6 +186,9 @@ func commandSuggest(args []string) int {
 			result.Usage.InputTokens,
 			result.Usage.OutputTokens,
 		)
+		if result.FallbackReason != "" {
+			fmt.Fprintf(os.Stderr, "cake-suggest: fallback: %s\n", result.FallbackReason)
+		}
 	}
 
 	if jsonOut {

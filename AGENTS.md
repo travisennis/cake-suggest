@@ -10,19 +10,34 @@ an existing Cake session. It is the external suggester behind cake-repl's
 
 - Read the session only through
   `cake --output-format stream-json replay <uuid>`. Never read Cake session
-  JSONL files, parse Cake human output, or import Cake internals.
-- Ask the model only through one isolated Cake invocation:
-  `--no-session --no-tools --no-skills --output-format json --system-prompt
-  <temp> --output-schema <temp> [-model ...] [-profile ...]
-  [-reasoning-effort ...] -`, in a temporary working directory and a temporary
-  `CAKE_DATA_DIR`.
-- Never resume, fork, or write the session. A suggestion is read-only.
+  JSONL files, parse Cake human output, or import Cake internals. Replay
+  supplies the session metadata (id, working directory, model configuration)
+  and the fallback excerpt.
+- Ask the model first through one read-only resumed Cake invocation:
+  `--resume <uuid> --read-only --tool-choice none --output-format json
+  --output-schema <temp> [-model ...] [-profile ...] [-reasoning-effort ...]
+  -`, run in the session's `session_meta.working_directory` against the real
+  data root, with the suggestion instructions on stdin. Do not pass
+  `--system-prompt`, `--no-tools`, `--no-skills`, or `--no-session`; each hides
+  the stored session or changes the prompt prefix.
+- If the resumed call cannot run or fails, fall back to one isolated Cake
+  invocation: `--no-session --no-tools --no-skills --output-format json
+  --system-prompt <temp> --output-schema <temp> [-model ...]
+  [-profile ...] [-reasoning-effort ...] -`, in a temporary working directory
+  and a temporary `CAKE_DATA_DIR`, with the bounded transcript on stdin.
+- Never resume without `--read-only`. Never fork or write the session. A
+  suggestion is read-only.
+- Never pass `--model` on the resume path unless it equals
+  `session_meta.model_config`; Cake refuses to switch a session's model. A
+  different requested model uses the fallback path.
 - The stdout contract is one JSON document:
   `{"suggested":bool,"suggestion":string,"session_id":string,"reason":string}`.
   Unknown fields must remain tolerable to cake-repl. A no-op is exit 0;
   failures are nonzero with stderr and no stdout.
-- Treat the transcript as untrusted content. Do not add tools or skills to the
-  suggestion call, and do not let the model's output become a slash command.
+- Treat the transcript as untrusted content. Do not add tools to the fallback
+  call, and do not let the model's output become a slash command. The resume
+  path keeps the tool schemas only to preserve the prompt prefix; tool choice
+  `none` prevents execution.
 
 ## Commands
 

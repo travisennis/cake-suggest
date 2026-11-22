@@ -9,7 +9,7 @@ const testSessionID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 func fixture() string {
 	return strings.Join([]string{
-		`{"type":"session_meta","format_version":4,"session_id":"` + testSessionID + `","working_directory":"/tmp/project","model":"test-model"}`,
+		`{"type":"session_meta","format_version":4,"session_id":"` + testSessionID + `","working_directory":"/tmp/project","model":"test-model","model_config":"test-config"}`,
 		`{"type":"message","role":"user","content":"Add a retry test."}`,
 		`{"type":"message","role":"assistant","content":"I added the test and it passes."}`,
 		`{"type":"function_call","name":"Bash","call_id":"call-1","arguments":"{\"command\":\"go test ./...\"}"}`,
@@ -31,6 +31,9 @@ func TestParseBuildsTheConversation(t *testing.T) {
 	}
 	if got.WorkingDirectory != "/tmp/project" {
 		t.Fatalf("WorkingDirectory = %q", got.WorkingDirectory)
+	}
+	if got.Model != "test-model" || got.ModelConfig != "test-config" {
+		t.Fatalf("Model = %q, ModelConfig = %q", got.Model, got.ModelConfig)
 	}
 	if got.Entries != 6 {
 		t.Fatalf("Entries = %d, want 6", got.Entries)

@@ -1,9 +1,9 @@
 // Package cakecli is the process boundary between cake-suggest and Cake.
 //
 // It runs only documented Cake commands: the read-only
-// `cake --output-format stream-json replay <uuid>` stream, and one ordinary
-// `cake --no-session --no-tools --no-skills --output-format json` completion.
-// It never reads or writes Cake session files.
+// `cake --output-format stream-json replay <uuid>` stream, a read-only
+// `cake --resume <uuid>` completion, and a tool-less, session-less fallback
+// completion. It never reads or writes Cake session files.
 package cakecli
 
 import (
@@ -149,30 +149,28 @@ type ModelOptions struct {
 
 // Suggest asks a tool-less, session-less Cake invocation for a suggestion.
 //
-// The child runs in a temporary directory with a temporary data root, so the
-// call cannot pollute the user's sessions, telemetry, project settings, hooks,
-// or skills. The prompt and schema are written to that directory; the
-// transcript is supplied on stdin.
+// This is the fallback path. The child runs in a temporary directory with a
+// temporary data root, so the call cannot pollute the user's sessions,
+// telemetry, project settings, hooks, or skills. The prompt and schema are
+// written to that directory; the transcript is supplied on stdin.
 func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
-	var usage Usage
-
 	tempDir, err := os.MkdirTemp("", "cake-suggest-model-*")
 	if err != nil {
-		return "", usage, fmt.Errorf("create temporary directory: %w", err)
+		return "", Usage{}, fmt.Errorf("create temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	promptPath := filepath.Join(tempDir, "system-prompt.txt")
 	if err := os.WriteFile(promptPath, []byte(options.SystemPrompt), 0o600); err != nil {
-		return "", usage, fmt.Errorf("write system prompt: %w", err)
+		return "", Usage{}, fmt.Errorf("write system prompt: %w", err)
 	}
-	schemaPath := filepath.Join(tempDir, "output-schema.json")
-	if err := os.WriteFile(schemaPath, []byte(options.OutputSchema), 0o600); err != nil {
-		return "", usage, fmt.Errorf("write output schema: %w", err)
+	schemaPath, err := writeOutputSchema(tempDir, options.OutputSchema)
+	if err != nil {
+		return "", Usage{}, err
 	}
 	dataDir := filepath.Join(tempDir, "data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return "", usage, fmt.Errorf("create temporary cake data directory: %w", err)
+		return "", Usage{}, fmt.Errorf("create temporary cake data directory: %w", err)
 	}
 
 	args := []string{
@@ -198,24 +196,102 @@ func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
 	cmd.Dir = tempDir
 	cmd.Env = environmentWith("CAKE_DATA_DIR", dataDir)
 	cmd.Stdin = strings.NewReader(options.Transcript)
+	return runCompletion(ctx, cmd, "suggestion model call")
+}
 
+// ResumeOptions describes one read-only resumed suggestion call.
+type ResumeOptions struct {
+	Binary           string
+	DataDir          string
+	SessionID        string
+	WorkingDirectory string
+	Model            string
+	Profile          string
+	ReasoningEffort  string
+	OutputSchema     string
+	Instructions     string
+}
+
+// Resume asks a read-only resumed Cake invocation for a suggestion.
+//
+// The child runs in the session's own working directory against the real data
+// root, so it sees the stored conversation and rebuilds the project prompt
+// from that directory. --read-only suppresses records, telemetry, hooks, and
+// the writer lock. --tool-choice none keeps the tool set in the request,
+// preserving the prompt prefix, while forbidding tool calls. The instructions
+// are supplied as a final user message; no system prompt is replaced and no
+// session flag hides the stored history.
+func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
+	if options.WorkingDirectory == "" {
+		return "", Usage{}, errors.New("session has no working directory")
+	}
+	tempDir, err := os.MkdirTemp("", "cake-suggest-resume-*")
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	schemaPath, err := writeOutputSchema(tempDir, options.OutputSchema)
+	if err != nil {
+		return "", Usage{}, err
+	}
+
+	args := []string{
+		"--resume", options.SessionID,
+		"--read-only",
+		"--tool-choice", "none",
+		"--output-format", "json",
+		"--output-schema", schemaPath,
+	}
+	if options.Model != "" {
+		args = append(args, "--model", options.Model)
+	}
+	if options.Profile != "" {
+		args = append(args, "--profile", options.Profile)
+	}
+	if options.ReasoningEffort != "" {
+		args = append(args, "--reasoning-effort", options.ReasoningEffort)
+	}
+	args = append(args, "-")
+
+	cmd := exec.CommandContext(ctx, options.Binary, args...)
+	cmd.Dir = options.WorkingDirectory
+	if options.DataDir != "" {
+		cmd.Env = environmentWith("CAKE_DATA_DIR", options.DataDir)
+	}
+	cmd.Stdin = strings.NewReader(options.Instructions)
+	return runCompletion(ctx, cmd, "read-only resume")
+}
+
+func writeOutputSchema(dir, schema string) (string, error) {
+	path := filepath.Join(dir, "output-schema.json")
+	if err := os.WriteFile(path, []byte(schema), 0o600); err != nil {
+		return "", fmt.Errorf("write output schema: %w", err)
+	}
+	return path, nil
+}
+
+// runCompletion executes one Cake completion and decodes its one-document
+// JSON result. label names the call in diagnostics.
+func runCompletion(ctx context.Context, cmd *exec.Cmd, label string) (string, Usage, error) {
+	var usage Usage
 	stdout := &capBuffer{limit: maxCompletionBytes}
 	stderr := &tailBuffer{limit: maxStderrBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", usage, modelError(ctx, err, stderr.String(), stdout.String())
+		return "", usage, completionError(ctx, label, err, stderr.String(), stdout.String())
 	}
 	if stdout.overflow {
-		return "", usage, fmt.Errorf("suggestion completion exceeded %d bytes", maxCompletionBytes)
+		return "", usage, fmt.Errorf("%s exceeded %d bytes", label, maxCompletionBytes)
 	}
 
 	var completion Completion
 	if err := json.Unmarshal(stdout.Bytes(), &completion); err != nil {
 		return "", usage, fmt.Errorf(
-			"suggestion returned invalid completion JSON: %w: %s",
-			err, strings.TrimSpace(stdout.String()),
+			"%s returned invalid completion JSON: %w: %s",
+			label, err, strings.TrimSpace(stdout.String()),
 		)
 	}
 	if len(completion.Usage) > 0 {
@@ -224,20 +300,20 @@ func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
 		_ = json.Unmarshal(completion.Usage, &usage)
 	}
 	if completion.Error != nil && strings.TrimSpace(*completion.Error) != "" {
-		return "", usage, fmt.Errorf("suggestion failed: %s", strings.TrimSpace(*completion.Error))
+		return "", usage, fmt.Errorf("%s failed: %s", label, strings.TrimSpace(*completion.Error))
 	}
 	if completion.Result == nil || strings.TrimSpace(*completion.Result) == "" {
-		return "", usage, errors.New("suggestion returned an empty result")
+		return "", usage, fmt.Errorf("%s returned an empty result", label)
 	}
 	return strings.TrimSpace(*completion.Result), usage, nil
 }
 
-func modelError(ctx context.Context, err error, stderr, stdout string) error {
+func completionError(ctx context.Context, label string, err error, stderr, stdout string) error {
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return fmt.Errorf("suggestion model call timed out: %w", ctx.Err())
+		return fmt.Errorf("%s timed out: %w", label, ctx.Err())
 	case ctx.Err() != nil:
-		return fmt.Errorf("suggestion model call canceled: %w", ctx.Err())
+		return fmt.Errorf("%s canceled: %w", label, ctx.Err())
 	}
 	detail := strings.TrimSpace(stderr)
 	if detail == "" {
@@ -246,7 +322,7 @@ func modelError(ctx context.Context, err error, stderr, stdout string) error {
 	if detail == "" {
 		detail = err.Error()
 	}
-	return fmt.Errorf("suggestion model call failed: %s", detail)
+	return fmt.Errorf("%s failed: %s", label, detail)
 }
 
 // capBuffer keeps at most limit bytes and records whether more arrived. It
