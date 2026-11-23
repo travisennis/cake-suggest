@@ -77,7 +77,7 @@ func ResolveDataDir(override string) (string, error) {
 // data. Otherwise the cache defaults to ~/.cache/cake while sessions stay in
 // ~/.local/share/cake/sessions.
 func ResolveCacheDir(dataDir string, dataDirConfigured bool) (string, error) {
-	if dataDirConfigured {
+	if dataDirConfigured || os.Getenv("CAKE_DATA_DIR") != "" {
 		return dataDir, nil
 	}
 	home, err := os.UserHomeDir()

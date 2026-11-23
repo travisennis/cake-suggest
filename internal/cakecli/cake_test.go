@@ -41,6 +41,16 @@ func TestResolveCacheDir(t *testing.T) {
 		t.Fatalf("ResolveCacheDir(configured) = %q, want %q", got, dataDir)
 	}
 
+	t.Setenv("CAKE_DATA_DIR", dataDir)
+	got, err = ResolveCacheDir(dataDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != dataDir {
+		t.Fatalf("ResolveCacheDir(CAKE_DATA_DIR) = %q, want %q", got, dataDir)
+	}
+	t.Setenv("CAKE_DATA_DIR", "")
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the default cache path uses HOME on Unix")
 	}
