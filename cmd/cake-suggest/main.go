@@ -64,9 +64,9 @@ Usage:
 
 The session is read through Cake's read-only replay stream. The suggestion
 call first reuses the exact provider request captured after the completed
-turn, then falls back to a read-only resume with tool choice none, then to a
-bounded replay excerpt. Reuse and resume never append to the session. Nothing
-is written to the session.
+turn, preserving its tool choice, then falls back to a read-only resume with
+tool choice none, then to a bounded replay excerpt. Reuse and resume never
+append to the session. Nothing is written to the session.
 
 Flags:
   -cake-bin <path>             cake executable (default: $CAKE_BIN or cake)

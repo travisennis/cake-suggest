@@ -16,7 +16,7 @@ the composer.
 
 - A Cake build that supports:
   - `cake --output-format stream-json replay <uuid>`
-  - `cake --resume <uuid> --reuse-last-request --tool-choice none --output-format json`
+  - `cake --resume <uuid> --reuse-last-request --output-format json`
   - `cake --resume <uuid> --read-only --tool-choice none --output-format json`
   - `--output-schema` on a normal Cake run
 - Go 1.25 or newer to build.
@@ -70,19 +70,21 @@ stderr.
 2. **Reuse the captured request.** Run:
 
    ```sh
-   cake --resume <uuid> --reuse-last-request --tool-choice none \
+   cake --resume <uuid> --reuse-last-request \
      --output-format json --output-schema <temp> [-model ...] [-profile ...] -
    ```
 
    `--reuse-last-request` implies `--read-only`, so this tool does not pass
-   both. Cake sends the next-request body captured after the latest successful
-   persisted task, appends the suggestion instructions as the final user
-   message, and sets `tool_choice` to `none`. The captured system prompt, tool
-   schemas, history, and request-shaped hook context stay intact, so a
-   cache-aware provider can reuse the prefix. Because the reused body bypasses
-   Cake's usual output-schema context, the appended instructions also include
-   the JSON schema. The call writes no session records, telemetry, hooks, or
-   writer lock and does not read the current project prompt.
+   both. It also does not pass `--tool-choice`: Cake preserves the captured
+   request's choice and rejects a returned tool call before dispatch. Cake
+   sends the next-request body captured after the latest successful persisted
+   task, appends the suggestion instructions as the final user message, and
+   keeps the captured `tool_choice`. The captured system prompt, tool schemas,
+   history, and request-shaped hook context stay intact, so a cache-aware
+   provider can reuse the prefix. Because the reused body bypasses Cake's
+   usual output-schema context, the appended instructions also include the
+   JSON schema. The call writes no session records, telemetry, hooks, or writer
+   lock and does not read the current project prompt.
 
    Before the call, `cake-suggest` preflights
    `<cache>/session-requests/<uuid>.json` against the replay metadata. It
@@ -110,10 +112,10 @@ stderr.
    data root. The suggestion instructions and an end marker are on stdin as a
    final user message. `--read-only` suppresses session records, telemetry,
    hooks, and the writer lock, so the session is unchanged.
-   `--tool-choice none` forbids tool calls while leaving the tool schemas in
-   the request. The call does not pass `--system-prompt`, `--no-tools`,
-   `--no-skills`, or `--no-session`: each would hide the stored history or
-   change the prompt prefix. Resume is skipped when:
+   `--tool-choice none` asks the provider to forbid tool calls while leaving
+   the tool schemas in the request. The call does not pass `--system-prompt`,
+   `--no-tools`, `--no-skills`, or `--no-session`: each would hide the stored
+   history or change the prompt prefix. Resume is skipped when:
 
    - `session_meta` has no working directory, a relative working directory, or
      a directory that no longer exists;
@@ -157,9 +159,11 @@ stderr.
   `--read-only` restores the full stored conversation and the session identity
   without either side effect, so the model sees reasoning and tool output that
   the excerpt projector drops.
-- **`--tool-choice none`, not `--no-tools`.** Removing tools changes the
-  request's tool schemas and prompt prefix. Keeping them and forbidding calls
-  preserves the prefix while preventing tool execution.
+- **Preserve the captured tool choice; use `--tool-choice none` on resume.**
+  Removing tools changes the request's tool schemas and prompt prefix. Reuse
+  keeps the captured choice and rejects any returned tool call before dispatch.
+  The read-only resume keeps the schemas and passes `none` to ask the provider
+  not to call a tool.
 - **The session's working directory, not a temporary one.** For resume, Cake
   rebuilds its project prompt from the current directory; running where the
   session ran keeps project instructions, settings, and skills close to what
@@ -247,14 +251,15 @@ output contains a revision line.
   the session JSONL.
 - The resume call runs in the session's working directory, so it loads that
   project's trusted Cake configuration and instruction files, as a normal Cake
-  run there would. Read-only mode still suppresses hooks, and tool choice
-  `none` prevents tool execution. Reuse bypasses project context and keeps the
-  captured context instead. The reuse instructions carry the output schema
-  because the captured body cannot add Cake's usual schema context.
-- `--tool-choice none` prevents tool execution even though the tool schemas
-  remain in the request. The tool set is kept only to preserve the prompt
-  prefix. Cake rejects a returned tool call before dispatch on both reuse and
-  read-only resume.
+  run there would. Read-only mode still suppresses hooks; `--tool-choice none`
+  asks the provider not to call a tool. Reuse bypasses project context and
+  keeps the captured context instead. The reuse instructions carry the output
+  schema because the captured body cannot add Cake's usual schema context.
+- Reuse preserves the captured tool choice; Cake rejects a returned tool call
+  before dispatch, so the tool schemas can stay in the request without any
+  execution. The read-only resume passes `--tool-choice none`; it relies on the
+  provider honoring that choice. The tool set is kept on both paths only to
+  preserve the prompt prefix.
 - The transcript is sent only to the model endpoint selected by the user's Cake
   configuration. Reuse and resume send the session's stored conversation; the
   fallback sends the bounded excerpt. Neither is written to a persistent file
@@ -281,9 +286,8 @@ output contains a revision line.
   Provider prompt caching is not guaranteed; only the request prefix and
   session identity are preserved. Cached-token counters are provider-reported;
   a zero or absent counter does not prove the provider skipped its cache. The
-  reuse path also changes `tool_choice` to `none`; a provider that includes
-  `tool_choice` in its cache identity may miss the cache on the first reuse
-  even though the messages and tools match.
+  reuse path preserves the captured `tool_choice`, so a provider that includes
+  it in its cache identity sees the same value as the main turn.
 - The fallback is lossy: reasoning is omitted, tool output is clipped, and old
   context is dropped. A suggestion can miss a detail that the full session
   would supply.
@@ -337,17 +341,19 @@ call.
   with the `Ctrl+S use suggestion` hint, and `Ctrl+S` submitted it as a `YOU`
   row.
 - Phase 4 real-session validation ran against an isolated temp data and
-  config root with the default model. A tool-choice-controlled session was
-  seeded with `--tool-choice none`; after replacing a 50 KB project
+  config root with the default model. After replacing a 50 KB project
   `AGENTS.md`, request reuse sent 12,849 input tokens with 12,800 cached, while
   read-only resume rebuilt the request with 12,226 input tokens and 0 cached.
   With unchanged context, both paths warmed to 1,920 cached tokens and reuse
   saved the 56-token difference in the appended instructions.
-- The first reuse after a normal `tool_choice: auto` seed reported 0 cached
-  tokens; the second reuse, now matching the captured `none` choice, reported
-  12,800. The provider appears to include `tool_choice` in its prefix-cache
-  identity. A normal main turn still uses `auto`, so the first post-turn reuse
-  may not get the cache benefit until this is decided; see the initiative.
+- The tool-choice fix was validated 2026-11-23 with a normal
+  `tool_choice: auto` seed: the main turn sent 9,161 input tokens; the first
+  reuse preserved `auto` and sent 9,671 with 9,088 cached; the read-only
+  resume fallback sent 6,521 with 0 cached. The reuse body kept 6 tools and
+  `tool_choice: auto`; the resume body kept the same tools and
+  `tool_choice: none`. A second reuse after the `none` resume reported 0
+  cached, so provider cache identity still varies; the first post-turn reuse
+  is the path that matters.
 - Reuse and read-only resume left the session file, telemetry sidecar, request
   capture, and hook log unchanged; only Cake's daily diagnostic log grew.
   Missing, stale, and incompatible captures fell back to resume with typed

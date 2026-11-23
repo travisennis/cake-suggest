@@ -481,7 +481,6 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 	for _, want := range []string{
 		"--resume\n" + testID,
 		"--reuse-last-request",
-		"--tool-choice\nnone",
 		"--output-format\njson",
 		"--output-schema",
 		"--model\ntest-config",
@@ -492,7 +491,7 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 			t.Errorf("reuse args do not contain %q:\n%s", want, args)
 		}
 	}
-	for _, forbidden := range []string{"--read-only", "--no-session", "--no-tools", "--no-skills", "--system-prompt"} {
+	for _, forbidden := range []string{"--read-only", "--tool-choice", "--no-session", "--no-tools", "--no-skills", "--system-prompt"} {
 		if strings.Contains(args, forbidden) {
 			t.Errorf("reuse args must not contain %q:\n%s", forbidden, args)
 		}

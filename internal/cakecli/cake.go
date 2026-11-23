@@ -311,10 +311,11 @@ func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
 // Reuse asks Cake to send the captured next-request body for one suggestion.
 //
 // --reuse-last-request implies --read-only, so this path does not pass that
-// flag. It still passes --tool-choice none because Cake requires it for reuse
-// and enforces it before dispatch. The working directory may be empty when the
-// stored session directory is unavailable; reuse bypasses project context, so
-// the child then inherits cake-suggest's directory.
+// flag. It also does not pass --tool-choice: Cake preserves the captured
+// request's choice, and a returned tool call is rejected before dispatch. The
+// working directory may be empty when the stored session directory is
+// unavailable; reuse bypasses project context, so the child then inherits
+// cake-suggest's directory.
 func Reuse(ctx context.Context, options ReuseOptions) (string, Usage, error) {
 	return resumedCompletion(ctx, options, true)
 }
@@ -338,10 +339,9 @@ func resumedCompletion(ctx context.Context, options ResumeOptions, reuse bool) (
 	if reuse {
 		args = append(args, "--reuse-last-request")
 	} else {
-		args = append(args, "--read-only")
+		args = append(args, "--read-only", "--tool-choice", "none")
 	}
 	args = append(args,
-		"--tool-choice", "none",
 		"--output-format", "json",
 		"--output-schema", schemaPath,
 	)

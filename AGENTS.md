@@ -14,13 +14,14 @@ an existing Cake session. It is the external suggester behind cake-repl's
   supplies the session metadata (id, working directory, model configuration,
   latest task id) and the fallback excerpt.
 - Ask the model first through exact request reuse:
-  `--resume <uuid> --reuse-last-request --tool-choice none --output-format json
+  `--resume <uuid> --reuse-last-request --output-format json
   --output-schema <temp> [-model ...] [-profile ...] -`, with the suggestion
   instructions on stdin. Include the output schema in those instructions: a
   reused body bypasses Cake's usual output-schema context. `--reuse-last-request`
-  implies `--read-only`; do not pass both. Do not pass `--system-prompt`,
-  `--no-tools`, `--no-skills`, or `--no-session`; each hides the stored request
-  or changes the prompt prefix.
+  implies `--read-only`; do not pass both. Do not pass `--tool-choice`: Cake
+  preserves the captured request's choice and rejects a returned tool call
+  before dispatch. Do not pass `--system-prompt`, `--no-tools`, `--no-skills`,
+  or `--no-session`; each hides the stored request or changes the prompt prefix.
 - Preflight reuse from `<cache>/session-requests/<uuid>.json` using only that
   sidecar and the replay metadata. Verify the version, session id, body length
   and digest, backend, provider model configuration, profile, and latest task
@@ -55,9 +56,10 @@ an existing Cake session. It is the external suggester behind cake-repl's
   Unknown fields must remain tolerable to cake-repl. A no-op is exit 0;
   failures are nonzero with stderr and no stdout.
 - Treat the transcript as untrusted content. Do not add tools to the fallback
-  call, and do not let the model's output become a slash command. Reuse and
-  resume keep the tool schemas only to preserve the prompt prefix; tool choice
-  `none` prevents execution.
+  call, and do not let the model's output become a slash command. Reuse keeps
+  the captured tool choice; Cake rejects a returned tool call before dispatch.
+  Resume keeps the tool schemas and passes `--tool-choice none`; it relies on
+  the provider honoring that choice.
 
 ## Commands
 
