@@ -83,6 +83,27 @@ func TestParseToleratesCompactionModelObject(t *testing.T) {
 	}
 }
 
+func TestParseTracksTheLatestTask(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"session_meta","format_version":4,"session_id":"` + testSessionID + `"}`,
+		`{"type":"task_start","session_id":"` + testSessionID + `","task_id":"task-one"}`,
+		`{"type":"task_start","session_id":"` + testSessionID + `","task_id":"task-two"}`,
+		`{"type":"task_complete","session_id":"` + testSessionID + `","task_id":"task-two"}`,
+		`{"type":"message","role":"user","content":"hello"}`,
+	}, "\n") + "\n"
+
+	got, err := Parse([]byte(stream), testSessionID, 100_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastTaskID != "task-two" {
+		t.Fatalf("LastTaskID = %q, want task-two", got.LastTaskID)
+	}
+	if got.Entries != 1 || strings.Contains(got.Text, "task-two") {
+		t.Fatalf("task records leaked into the excerpt: entries=%d text=%q", got.Entries, got.Text)
+	}
+}
+
 func TestParseRejectsAnotherSession(t *testing.T) {
 	other := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	_, err := Parse([]byte(fixture()), other, 100_000)

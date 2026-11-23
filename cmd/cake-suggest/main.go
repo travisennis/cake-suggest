@@ -2,8 +2,8 @@
 // session.
 //
 // It reads the session metadata through Cake's read-only replay stream and
-// asks Cake to resume the session read-only for the suggestion, so the model
-// sees the full conversation without appending a turn. When that call cannot
+// first asks Cake to reuse the exact request captured after the completed
+// turn. If that cannot run, it resumes the session read-only. If neither can
 // run, it falls back to one isolated, tool-less Cake model call over a bounded
 // transcript excerpt. It never writes to the session and never reads Cake
 // session files.
@@ -16,10 +16,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"regexp"
 	"syscall"
 	"time"
 
+	"github.com/travisennis/cake-suggest/internal/cakecli"
 	"github.com/travisennis/cake-suggest/internal/suggest"
 	"github.com/travisennis/cake-suggest/internal/version"
 )
@@ -27,10 +27,6 @@ import (
 const (
 	defaultTimeout     = 50 * time.Second
 	defaultReplayBytes = 64 << 20
-)
-
-var sessionIDPattern = regexp.MustCompile(
-	`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
 )
 
 func main() {
@@ -67,10 +63,10 @@ Usage:
   cake-suggest help | -h | --help
 
 The session is read through Cake's read-only replay stream. The suggestion
-call resumes the session read-only with tool choice none in the session's
-working directory, so the model sees the full stored conversation. If that
-call cannot run, a bounded replay excerpt is used instead. Nothing is written
-to the session.
+call first reuses the exact provider request captured after the completed
+turn, then falls back to a read-only resume with tool choice none, then to a
+bounded replay excerpt. Reuse and resume never append to the session. Nothing
+is written to the session.
 
 Flags:
   -cake-bin <path>             cake executable (default: $CAKE_BIN or cake)
@@ -82,7 +78,7 @@ Flags:
   -max-transcript-chars <n>    fallback transcript excerpt bound (default 20000)
   -max-replay-bytes <n>        replay stream bound (default 67108864)
   -json                        emit one JSON document
-  -verbose                     print content-free timings and usage on stderr
+  -verbose                     print content-free timings and usage (including cached tokens) on stderr
 
 JSON result:
   {"suggested":true,"suggestion":"...","session_id":"..."}
@@ -137,7 +133,7 @@ func commandSuggest(args []string) int {
 		return 2
 	}
 	sessionID := fs.Arg(0)
-	if !sessionIDPattern.MatchString(sessionID) {
+	if !cakecli.ValidSessionID(sessionID) {
 		fmt.Fprintf(os.Stderr, "invalid session id %q: expected a lowercase UUID\n", sessionID)
 		return 2
 	}
@@ -176,7 +172,7 @@ func commandSuggest(args []string) int {
 
 	if verbose {
 		fmt.Fprintf(os.Stderr,
-			"cake-suggest: mode=%s entries=%d chars=%d omitted=%d replay_ms=%d model_ms=%d tokens_in=%d tokens_out=%d\n",
+			"cake-suggest: mode=%s entries=%d chars=%d omitted=%d replay_ms=%d model_ms=%d tokens_in=%d tokens_out=%d cached_tokens=%d cache_write_tokens=%d\n",
 			result.Mode,
 			result.TranscriptEntries,
 			result.TranscriptChars,
@@ -185,6 +181,8 @@ func commandSuggest(args []string) int {
 			result.ModelElapsed.Milliseconds(),
 			result.Usage.InputTokens,
 			result.Usage.OutputTokens,
+			result.Usage.InputTokensDetails.CachedTokens,
+			result.Usage.InputTokensDetails.CacheWriteTokens,
 		)
 		if result.FallbackReason != "" {
 			fmt.Fprintf(os.Stderr, "cake-suggest: fallback: %s\n", result.FallbackReason)

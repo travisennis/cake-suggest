@@ -1,6 +1,7 @@
 package cakecli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,51 @@ func TestResolveDataDir(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("ResolveDataDir from env = %q, want %q", got, want)
+	}
+}
+
+func TestResolveCacheDir(t *testing.T) {
+	t.Setenv("CAKE_DATA_DIR", "")
+	dataDir := filepath.Join(t.TempDir(), "data")
+	got, err := ResolveCacheDir(dataDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != dataDir {
+		t.Fatalf("ResolveCacheDir(configured) = %q, want %q", got, dataDir)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	got, err = ResolveCacheDir(dataDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".cache", "cake")
+	if got != want {
+		t.Fatalf("ResolveCacheDir(default) = %q, want %q", got, want)
+	}
+}
+
+func TestValidSessionID(t *testing.T) {
+	if !ValidSessionID("01234567-89ab-4cde-8f01-23456789abcd") {
+		t.Fatal("valid UUID was rejected")
+	}
+	for _, id := range []string{"", "..", "../01234567-89ab-4cde-8f01-23456789abcd", "01234567-89AB-4cde-8f01-23456789abcd"} {
+		if ValidSessionID(id) {
+			t.Errorf("ValidSessionID(%q) = true, want false", id)
+		}
+	}
+}
+
+func TestUsageParsesCachedTokens(t *testing.T) {
+	raw := []byte(`{"input_tokens":500,"input_tokens_details":{"cached_tokens":321,"cache_write_tokens":12},"output_tokens":50,"total_tokens":550}`)
+	var usage Usage
+	if err := json.Unmarshal(raw, &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.InputTokensDetails.CachedTokens != 321 || usage.InputTokensDetails.CacheWriteTokens != 12 {
+		t.Fatalf("cached usage = %+v", usage.InputTokensDetails)
 	}
 }
 

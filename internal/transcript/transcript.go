@@ -33,9 +33,13 @@ type Transcript struct {
 	WorkingDirectory string
 	Model            string
 	ModelConfig      string
-	Text             string
-	Entries          int
-	Omitted          int
+	// LastTaskID is the task id on the newest task_start or task_complete
+	// record. It lets the caller tell whether a request capture was written
+	// for the session's latest task without reading the session file.
+	LastTaskID string
+	Text       string
+	Entries    int
+	Omitted    int
 }
 
 type record struct {
@@ -48,6 +52,7 @@ type record struct {
 	Summary   json.RawMessage `json:"summary"`
 	Kind      string          `json:"kind"`
 	Error     string          `json:"error"`
+	TaskID    string          `json:"task_id"`
 }
 
 // sessionMeta is decoded only for session_meta records. Replay records are
@@ -109,6 +114,10 @@ func Parse(data []byte, wantSessionID string, maxChars int) (Transcript, error) 
 				result.WorkingDirectory = meta.WorkingDirectory
 				result.Model = meta.Model
 				result.ModelConfig = meta.ModelConfig
+			} else if rec.Type == "task_start" || rec.Type == "task_complete" {
+				if rec.TaskID != "" {
+					result.LastTaskID = rec.TaskID
+				}
 			} else {
 				block, ok, err := blockFor(rec)
 				if err != nil {

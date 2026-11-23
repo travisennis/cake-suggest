@@ -1,9 +1,10 @@
 // Package cakecli is the process boundary between cake-suggest and Cake.
 //
 // It runs only documented Cake commands: the read-only
-// `cake --output-format stream-json replay <uuid>` stream, a read-only
-// `cake --resume <uuid>` completion, and a tool-less, session-less fallback
-// completion. It never reads or writes Cake session files.
+// `cake --output-format stream-json replay <uuid>` stream, an exact request
+// reuse, a read-only `cake --resume <uuid>` completion, and a tool-less,
+// session-less fallback completion. It never reads or writes Cake session
+// files.
 package cakecli
 
 import (
@@ -16,7 +17,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+)
+
+var sessionIDPattern = regexp.MustCompile(
+	`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
 )
 
 const (
@@ -64,6 +70,28 @@ func ResolveDataDir(override string) (string, error) {
 		return "", fmt.Errorf("cannot locate the home directory: %w", err)
 	}
 	return filepath.Join(home, ".local", "share", "cake"), nil
+}
+
+// ResolveCacheDir returns the Cake cache root. When a data root is configured
+// explicitly or through CAKE_DATA_DIR, Cake uses it for both cache and session
+// data. Otherwise the cache defaults to ~/.cache/cake while sessions stay in
+// ~/.local/share/cake/sessions.
+func ResolveCacheDir(dataDir string, dataDirConfigured bool) (string, error) {
+	if dataDirConfigured {
+		return dataDir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot locate the home directory: %w", err)
+	}
+	return filepath.Join(home, ".cache", "cake"), nil
+}
+
+// ValidSessionID reports whether id is the lowercase UUID Cake uses for
+// session identity. It also keeps a caller-supplied value from escaping the
+// capture directory path.
+func ValidSessionID(id string) bool {
+	return sessionIDPattern.MatchString(id)
 }
 
 // ReplayOptions describes one read-only session replay.
@@ -123,9 +151,17 @@ func replayError(ctx context.Context, err error, stderr string) error {
 // Usage is the provider-reported token usage for one Cake invocation. A zero
 // value means the response carried no usage, not zero tokens.
 type Usage struct {
-	InputTokens  uint64 `json:"input_tokens"`
-	OutputTokens uint64 `json:"output_tokens"`
-	TotalTokens  uint64 `json:"total_tokens"`
+	InputTokens        uint64             `json:"input_tokens"`
+	InputTokensDetails InputTokensDetails `json:"input_tokens_details"`
+	OutputTokens       uint64             `json:"output_tokens"`
+	TotalTokens        uint64             `json:"total_tokens"`
+}
+
+// InputTokensDetails is the provider's prompt-cache breakdown. Providers may
+// omit either counter; a missing field decodes as zero.
+type InputTokensDetails struct {
+	CachedTokens     uint64 `json:"cached_tokens"`
+	CacheWriteTokens uint64 `json:"cache_write_tokens"`
 }
 
 // Completion is the subset of Cake's --output-format json document this tool
@@ -212,6 +248,9 @@ type ResumeOptions struct {
 	Instructions     string
 }
 
+// ReuseOptions describes one exact request-reuse or read-only resume call.
+type ReuseOptions = ResumeOptions
+
 // Resume asks a read-only resumed Cake invocation for a suggestion.
 //
 // The child runs in the session's own working directory against the real data
@@ -222,7 +261,22 @@ type ResumeOptions struct {
 // are supplied as a final user message; no system prompt is replaced and no
 // session flag hides the stored history.
 func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
-	if options.WorkingDirectory == "" {
+	return resumedCompletion(ctx, options, false)
+}
+
+// Reuse asks Cake to send the captured next-request body for one suggestion.
+//
+// --reuse-last-request implies --read-only, so this path does not pass that
+// flag. It still passes --tool-choice none because Cake requires it for reuse
+// and enforces it before dispatch. The working directory may be empty when the
+// stored session directory is unavailable; reuse bypasses project context, so
+// the child then inherits cake-suggest's directory.
+func Reuse(ctx context.Context, options ReuseOptions) (string, Usage, error) {
+	return resumedCompletion(ctx, options, true)
+}
+
+func resumedCompletion(ctx context.Context, options ResumeOptions, reuse bool) (string, Usage, error) {
+	if !reuse && options.WorkingDirectory == "" {
 		return "", Usage{}, errors.New("session has no working directory")
 	}
 	tempDir, err := os.MkdirTemp("", "cake-suggest-resume-*")
@@ -236,13 +290,17 @@ func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
 		return "", Usage{}, err
 	}
 
-	args := []string{
-		"--resume", options.SessionID,
-		"--read-only",
+	args := []string{"--resume", options.SessionID}
+	if reuse {
+		args = append(args, "--reuse-last-request")
+	} else {
+		args = append(args, "--read-only")
+	}
+	args = append(args,
 		"--tool-choice", "none",
 		"--output-format", "json",
 		"--output-schema", schemaPath,
-	}
+	)
 	if options.Model != "" {
 		args = append(args, "--model", options.Model)
 	}
@@ -255,12 +313,18 @@ func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
 	args = append(args, "-")
 
 	cmd := exec.CommandContext(ctx, options.Binary, args...)
-	cmd.Dir = options.WorkingDirectory
+	if options.WorkingDirectory != "" {
+		cmd.Dir = options.WorkingDirectory
+	}
 	if options.DataDir != "" {
 		cmd.Env = environmentWith("CAKE_DATA_DIR", options.DataDir)
 	}
 	cmd.Stdin = strings.NewReader(options.Instructions)
-	return runCompletion(ctx, cmd, "read-only resume")
+	label := "read-only resume"
+	if reuse {
+		label = "request reuse"
+	}
+	return runCompletion(ctx, cmd, label)
 }
 
 func writeOutputSchema(dir, schema string) (string, error) {
