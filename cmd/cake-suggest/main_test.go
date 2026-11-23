@@ -197,6 +197,9 @@ func writeFile(path, content string) {
 
 func writeFakeCake(t *testing.T) string {
 	t.Helper()
+	// Keep the excerpt's config-isolation copy away from the developer's real
+	// Cake settings.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	binary, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		t.Fatal(err)

@@ -123,7 +123,10 @@ stderr.
 4. **Fall back to the bounded excerpt when needed.** When both reuse and
    resume are unavailable or fail, build a bounded transcript from the replay
    stream and run one isolated Cake call in a temporary directory with a
-   temporary data root:
+   temporary data root and a temporary Cake config root. The temp config
+   contains only a copy of the user's global `settings.toml`, so model and
+   profile selection still resolve while global hooks, MCP servers, skills,
+   and toolbox tools do not load:
 
    ```sh
    cake --no-session --no-tools --no-skills --output-format json \
@@ -236,7 +239,8 @@ output contains a revision line.
 - Reuse is read-only by implication: `--reuse-last-request` suppresses session
   records, telemetry, hooks, and the writer lock. The read-only resume and the
   excerpt fallback have the same no-write behavior. The fallback also runs
-  without a session, tools, skills, project settings, or the user's data root.
+  without a session, tools, skills, project settings, global hooks, MCP
+  servers, toolbox tools, or the user's data root.
 - Reuse reads only the local request-capture sidecar to preflight it. The
   captured body is verified by length and digest and never logged or sent by
   `cake-suggest`; Cake reads it for the child call. The preflight does not read
@@ -276,7 +280,10 @@ output contains a revision line.
   the session. The whole-request timeout bounds latency, not provider spend.
   Provider prompt caching is not guaranteed; only the request prefix and
   session identity are preserved. Cached-token counters are provider-reported;
-  a zero or absent counter does not prove the provider skipped its cache.
+  a zero or absent counter does not prove the provider skipped its cache. The
+  reuse path also changes `tool_choice` to `none`; a provider that includes
+  `tool_choice` in its cache identity may miss the cache on the first reuse
+  even though the messages and tools match.
 - The fallback is lossy: reasoning is omitted, tool output is clipped, and old
   context is dropped. A suggestion can miss a detail that the full session
   would supply.
@@ -329,8 +336,25 @@ call.
   this real binary: the ghost `Add a focused test for the fake path.` appeared
   with the `Ctrl+S use suggestion` hint, and `Ctrl+S` submitted it as a `YOU`
   row.
-- A real-session comparison of cached tokens with and without reuse is still
-  pending; the initiative's Phase 4 records that validation.
+- Phase 4 real-session validation ran against an isolated temp data and
+  config root with the default model. A tool-choice-controlled session was
+  seeded with `--tool-choice none`; after replacing a 50 KB project
+  `AGENTS.md`, request reuse sent 12,849 input tokens with 12,800 cached, while
+  read-only resume rebuilt the request with 12,226 input tokens and 0 cached.
+  With unchanged context, both paths warmed to 1,920 cached tokens and reuse
+  saved the 56-token difference in the appended instructions.
+- The first reuse after a normal `tool_choice: auto` seed reported 0 cached
+  tokens; the second reuse, now matching the captured `none` choice, reported
+  12,800. The provider appears to include `tool_choice` in its prefix-cache
+  identity. A normal main turn still uses `auto`, so the first post-turn reuse
+  may not get the cache benefit until this is decided; see the initiative.
+- Reuse and read-only resume left the session file, telemetry sidecar, request
+  capture, and hook log unchanged; only Cake's daily diagnostic log grew.
+  Missing, stale, and incompatible captures fell back to resume with typed
+  reasons. A missing working directory fell through to excerpt, which ran with
+  the temp config and left the hook log unchanged. Normal `--resume` from a
+  different cwd failed with the cwd guard and wrote nothing; from the session
+  cwd it appended a turn and a capture as expected.
 
 ## Related
 

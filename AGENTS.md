@@ -37,8 +37,11 @@ an existing Cake session. It is the external suggester behind cake-repl's
 - If the resumed call cannot run or fails, fall back to one isolated Cake
   invocation: `--no-session --no-tools --no-skills --output-format json
   --system-prompt <temp> --output-schema <temp> [-model ...]
-  [-profile ...] [-reasoning-effort ...] -`, in a temporary working directory
-  and a temporary `CAKE_DATA_DIR`, with the bounded transcript on stdin.
+  [-profile ...] [-reasoning-effort ...] -`, in a temporary working directory,
+  a temporary `CAKE_DATA_DIR`, and a temporary `XDG_CONFIG_HOME` containing
+  only a copy of the global `settings.toml`, with the bounded transcript on
+  stdin. The temp config must not include hooks, MCP servers, skills, or
+  toolbox tools; the excerpt must not trigger global hooks.
 - Never run a normal resume without `--read-only`. Never fork or write the
   session. A suggestion is read-only.
 - Never pass `--model` or `--profile` on the reuse path unless it matches the

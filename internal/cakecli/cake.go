@@ -186,15 +186,22 @@ type ModelOptions struct {
 // Suggest asks a tool-less, session-less Cake invocation for a suggestion.
 //
 // This is the fallback path. The child runs in a temporary directory with a
-// temporary data root, so the call cannot pollute the user's sessions,
-// telemetry, project settings, hooks, or skills. The prompt and schema are
-// written to that directory; the transcript is supplied on stdin.
+// temporary data root and a temporary Cake config root that contains only the
+// global settings.toml. It therefore cannot pollute the user's sessions,
+// telemetry, project settings, hooks, MCP servers, skills, or toolbox tools.
+// The prompt and schema are written to that directory; the transcript is
+// supplied on stdin.
 func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
 	tempDir, err := os.MkdirTemp("", "cake-suggest-model-*")
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("create temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	configRoot, err := isolatedConfigDir(tempDir)
+	if err != nil {
+		return "", Usage{}, err
+	}
 
 	promptPath := filepath.Join(tempDir, "system-prompt.txt")
 	if err := os.WriteFile(promptPath, []byte(options.SystemPrompt), 0o600); err != nil {
@@ -230,9 +237,46 @@ func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
 
 	cmd := exec.CommandContext(ctx, options.Binary, args...)
 	cmd.Dir = tempDir
-	cmd.Env = environmentWith("CAKE_DATA_DIR", dataDir)
+	cmd.Env = environmentWith(
+		"CAKE_DATA_DIR", dataDir,
+		"XDG_CONFIG_HOME", configRoot,
+	)
 	cmd.Stdin = strings.NewReader(options.Transcript)
 	return runCompletion(ctx, cmd, "suggestion model call")
+}
+
+// isolatedConfigDir creates a temporary Cake config root with a copy of the
+// user's global settings.toml. The excerpt call needs model and profile
+// definitions, but it must not load global hooks, MCP servers, skills, or
+// toolbox tools.
+func isolatedConfigDir(tempDir string) (string, error) {
+	root := filepath.Join(tempDir, "config")
+	cakeDir := filepath.Join(root, "cake")
+	if err := os.MkdirAll(cakeDir, 0o700); err != nil {
+		return "", fmt.Errorf("create isolated Cake config directory: %w", err)
+	}
+
+	sourceRoot := os.Getenv("XDG_CONFIG_HOME")
+	if sourceRoot == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot locate the home directory: %w", err)
+		}
+		sourceRoot = filepath.Join(home, ".config")
+	}
+	source := filepath.Join(sourceRoot, "cake", "settings.toml")
+	settings, err := os.ReadFile(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return root, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read Cake settings %q: %w", source, err)
+	}
+	path := filepath.Join(cakeDir, "settings.toml")
+	if err := os.WriteFile(path, settings, 0o600); err != nil {
+		return "", fmt.Errorf("write isolated Cake settings: %w", err)
+	}
+	return root, nil
 }
 
 // ResumeOptions describes one read-only resumed suggestion call.
@@ -431,19 +475,27 @@ func (w *tailBuffer) Write(p []byte) (int, error) {
 
 func (w *tailBuffer) String() string { return string(w.buf) }
 
-// environmentWith returns the process environment with key set to value,
-// removing duplicate assignments so the child sees the intended value.
-func environmentWith(key, value string) []string {
+// environmentWith returns the process environment with the supplied key/value
+// pairs replaced, so the child sees the intended values.
+func environmentWith(keyValues ...string) []string {
 	env := os.Environ()
-	filtered := make([]string, 0, len(env)+1)
-	prefix := key + "="
+	filtered := make([]string, 0, len(env)+len(keyValues)/2)
 	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			continue
+		skip := false
+		for i := 0; i+1 < len(keyValues); i += 2 {
+			if strings.HasPrefix(entry, keyValues[i]+"=") {
+				skip = true
+				break
+			}
 		}
-		filtered = append(filtered, entry)
+		if !skip {
+			filtered = append(filtered, entry)
+		}
 	}
-	return append(filtered, prefix+value)
+	for i := 0; i+1 < len(keyValues); i += 2 {
+		filtered = append(filtered, keyValues[i]+"="+keyValues[i+1])
+	}
+	return filtered
 }
 
 var _ io.Writer = (*capBuffer)(nil)
