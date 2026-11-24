@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/travisennis/cake-suggest/internal/cakecli"
-	"github.com/travisennis/cake-suggest/internal/transcript"
+	"github.com/travisennis/cake-suggest/internal/replay"
 )
 
 const (
@@ -41,7 +41,7 @@ func TestNormalizeSuggestion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := NormalizeSuggestion(test.input)
 			if got != test.want || ok != test.ok {
-				t.Fatalf("NormalizeSuggestion(%q) = (%q, %v), want (%q, %v)", test.input, got, ok, test.want, test.ok)
+				t.Fatalf("NormalizeSuggestion(%q) = (%q, %v), want (%q, %v)", test.input, got, test.ok, test.want, test.ok)
 			}
 		})
 	}
@@ -88,81 +88,27 @@ func TestNoOpReasonDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPromptCoversTheContract(t *testing.T) {
-	prompt := BuildSystemPrompt()
-	for _, want := range []string{"untrusted", "one line", "slash command", "suggested", "transcript"} {
-		if !strings.Contains(strings.ToLower(prompt), want) {
-			t.Errorf("system prompt does not mention %q", want)
-		}
-	}
-}
-
-func TestBuildResumeInstructionsCoversTheContract(t *testing.T) {
-	instructions := BuildResumeInstructions()
+func TestBuildInstructionsCarriesTheSchema(t *testing.T) {
+	instructions := buildInstructions()
 	for _, want := range []string{
 		"untrusted",
 		"do not call any tool",
 		"one line",
 		"slash command",
-		"suggested",
+		"$schema",
 		"END OF SUGGESTION REQUEST",
 	} {
 		if !strings.Contains(strings.ToLower(instructions), strings.ToLower(want)) {
-			t.Errorf("resume instructions do not mention %q", want)
+			t.Errorf("instructions do not mention %q", want)
 		}
-	}
-	if strings.Contains(instructions, "END OF TRANSCRIPT") {
-		t.Error("resume instructions contain the excerpt end marker")
-	}
-}
-
-func TestBuildReuseInstructionsIncludesTheSchema(t *testing.T) {
-	instructions := BuildReuseInstructions()
-	for _, want := range []string{
-		"$schema",
-		"suggested",
-		"suggestion",
-		"reason",
-		"END OF SUGGESTION REQUEST",
-	} {
-		if !strings.Contains(instructions, want) {
-			t.Errorf("reuse instructions do not contain %q", want)
-		}
-	}
-	if strings.Contains(instructions, "END OF TRANSCRIPT") {
-		t.Error("reuse instructions contain the excerpt end marker")
-	}
-}
-
-func TestResumeReadiness(t *testing.T) {
-	dir := t.TempDir()
-	view := transcript.Transcript{WorkingDirectory: dir, ModelConfig: "session-model"}
-	if ok, reason := resumeReadiness(Options{}, view); !ok {
-		t.Fatalf("resumeReadiness with a valid directory = false: %s", reason)
-	}
-	if ok, reason := resumeReadiness(Options{Model: "session-model"}, view); !ok {
-		t.Fatalf("resumeReadiness with the session model = false: %s", reason)
-	}
-	if ok, reason := resumeReadiness(Options{Model: "other-model"}, view); ok ||
-		!strings.Contains(reason, "differs") {
-		t.Fatalf("resumeReadiness with another model = (%v, %q), want a mismatch", ok, reason)
-	}
-	if ok, reason := resumeReadiness(Options{}, transcript.Transcript{}); ok ||
-		!strings.Contains(reason, "no working directory") {
-		t.Fatalf("resumeReadiness without a directory = (%v, %q)", ok, reason)
-	}
-	if ok, reason := resumeReadiness(Options{}, transcript.Transcript{WorkingDirectory: "relative"}); ok ||
-		!strings.Contains(reason, "not absolute") {
-		t.Fatalf("resumeReadiness with a relative directory = (%v, %q)", ok, reason)
 	}
 }
 
 func TestReuseReadiness(t *testing.T) {
-	baseView := func() transcript.Transcript {
-		return transcript.Transcript{
+	baseSession := func() replay.Session {
+		return replay.Session{
 			SessionID:        testSessionID,
 			WorkingDirectory: t.TempDir(),
-			ModelConfig:      "test-config",
 			LastTaskID:       testTaskID,
 		}
 	}
@@ -171,7 +117,7 @@ func TestReuseReadiness(t *testing.T) {
 		noCapture      bool
 		mutateCapture  func(map[string]any)
 		mutateOptions  func(*Options)
-		mutateView     func(*transcript.Transcript)
+		mutateSession  func(*replay.Session)
 		wantKind       captureFailureKind
 		wantErr        string
 		wantWorkingDir bool
@@ -210,18 +156,43 @@ func TestReuseReadiness(t *testing.T) {
 			wantKind:      captureIncompatible,
 		},
 		{
-			name:       "session model mismatch",
-			mutateView: func(view *transcript.Transcript) { view.ModelConfig = "other-config" },
-			wantKind:   captureIncompatible,
+			name: "chat body without messages",
+			mutateCapture: func(capture map[string]any) {
+				setCaptureBody(capture, `{"input":[]}`)
+			},
+			wantKind: captureIncompatible,
+		},
+		{
+			name: "chat body with null messages",
+			mutateCapture: func(capture map[string]any) {
+				setCaptureBody(capture, `{"messages":null}`)
+			},
+			wantKind: captureIncompatible,
+		},
+		{
+			name: "responses body without input",
+			mutateCapture: func(capture map[string]any) {
+				capture["backend"] = "responses"
+				setCaptureBody(capture, `{"messages":[]}`)
+			},
+			wantKind: captureIncompatible,
+		},
+		{
+			name: "responses body with input",
+			mutateCapture: func(capture map[string]any) {
+				capture["backend"] = "responses"
+				setCaptureBody(capture, `{"input":[{"type":"message","role":"user","content":[]}]}`)
+			},
+			wantWorkingDir: true,
 		},
 		{
 			name:          "reasoning effort",
 			mutateOptions: func(options *Options) { options.ReasoningEffort = "high" },
-			wantErr:       "does not support -reasoning-effort",
+			wantErr:       "cannot be applied",
 		},
 		{
-			name:       "missing working directory",
-			mutateView: func(view *transcript.Transcript) { view.WorkingDirectory = "" },
+			name:          "missing working directory",
+			mutateSession: func(session *replay.Session) { session.WorkingDirectory = "" },
 		},
 	}
 	for _, test := range tests {
@@ -230,16 +201,16 @@ func TestReuseReadiness(t *testing.T) {
 			if !test.noCapture {
 				writeTestCapture(t, cacheDir, test.mutateCapture)
 			}
-			view := baseView()
-			if test.mutateView != nil {
-				test.mutateView(&view)
+			session := baseSession()
+			if test.mutateSession != nil {
+				test.mutateSession(&session)
 			}
 			options := Options{SessionID: testSessionID}
 			if test.mutateOptions != nil {
 				test.mutateOptions(&options)
 			}
 
-			plan, err := reuseReadiness(options, view, cacheDir)
+			plan, err := reuseReadiness(options, session, cacheDir)
 			if test.wantKind != "" {
 				var failure *captureFailure
 				if !errors.As(err, &failure) || failure.kind != test.wantKind {
@@ -256,8 +227,8 @@ func TestReuseReadiness(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.wantWorkingDir && plan.WorkingDirectory != view.WorkingDirectory {
-				t.Fatalf("working directory = %q, want %q", plan.WorkingDirectory, view.WorkingDirectory)
+			if test.wantWorkingDir && plan.WorkingDirectory != session.WorkingDirectory {
+				t.Fatalf("working directory = %q, want %q", plan.WorkingDirectory, session.WorkingDirectory)
 			}
 		})
 	}
@@ -287,10 +258,18 @@ func TestLogResultReportsCachedTokens(t *testing.T) {
 	}
 }
 
+func TestOutputSchemaIsValidJSON(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(outputSchema()), &schema); err != nil {
+		t.Fatalf("output schema is invalid JSON: %v", err)
+	}
+	if schema["type"] != "object" {
+		t.Fatalf("schema type = %v, want object", schema["type"])
+	}
+}
+
 func writeTestCapture(t *testing.T, cacheDir string, mutate func(map[string]any)) {
 	t.Helper()
-	body := `{"messages":[{"role":"system","content":"captured"}]}`
-	hash := sha256.Sum256([]byte(body))
 	capture := map[string]any{
 		"version":    captureVersion,
 		"session_id": testSessionID,
@@ -300,11 +279,9 @@ func writeTestCapture(t *testing.T, cacheDir string, mutate func(map[string]any)
 			"model":        "test-model",
 			"model_config": "test-config",
 		},
-		"backend":     "chat_completions",
-		"body":        body,
-		"body_sha256": fmt.Sprintf("%x", hash),
-		"body_len":    len(body),
+		"backend": "chat_completions",
 	}
+	setCaptureBody(capture, `{"messages":[{"role":"system","content":"captured"}]}`)
 	if mutate != nil {
 		mutate(capture)
 	}
@@ -321,12 +298,9 @@ func writeTestCapture(t *testing.T, cacheDir string, mutate func(map[string]any)
 	}
 }
 
-func TestOutputSchemaIsValidJSON(t *testing.T) {
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(OutputSchema()), &schema); err != nil {
-		t.Fatalf("output schema is invalid JSON: %v", err)
-	}
-	if schema["type"] != "object" {
-		t.Fatalf("schema type = %v, want object", schema["type"])
-	}
+func setCaptureBody(capture map[string]any, body string) {
+	hash := sha256.Sum256([]byte(body))
+	capture["body"] = body
+	capture["body_sha256"] = fmt.Sprintf("%x", hash)
+	capture["body_len"] = len(body)
 }

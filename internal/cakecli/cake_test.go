@@ -170,53 +170,6 @@ func TestEnvironmentWithReplacesDuplicates(t *testing.T) {
 	}
 }
 
-func TestIsolatedConfigDirCopiesOnlySettings(t *testing.T) {
-	sourceRoot := t.TempDir()
-	sourceCake := filepath.Join(sourceRoot, "cake")
-	if err := os.MkdirAll(sourceCake, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	settings := []byte("default_model = \"test-model\"\n")
-	if err := os.WriteFile(filepath.Join(sourceCake, "settings.toml"), settings, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sourceCake, "hooks.json"), []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", sourceRoot)
-
-	temp := t.TempDir()
-	root, err := isolatedConfigDir(temp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if root != filepath.Join(temp, "config") {
-		t.Fatalf("root = %q, want the temporary config root", root)
-	}
-	copied, err := os.ReadFile(filepath.Join(root, "cake", "settings.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(copied) != string(settings) {
-		t.Fatalf("settings = %q, want %q", copied, settings)
-	}
-	if _, err := os.Stat(filepath.Join(root, "cake", "hooks.json")); !os.IsNotExist(err) {
-		t.Fatalf("hooks were copied into the isolated config: %v", err)
-	}
-}
-
-func TestIsolatedConfigDirAllowsMissingSettings(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	temp := t.TempDir()
-	root, err := isolatedConfigDir(temp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if root != filepath.Join(temp, "config") {
-		t.Fatalf("root = %q, want the temporary config root", root)
-	}
-}
-
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

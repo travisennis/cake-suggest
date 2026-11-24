@@ -1,10 +1,8 @@
 // Package cakecli is the process boundary between cake-suggest and Cake.
 //
 // It runs only documented Cake commands: the read-only
-// `cake --output-format stream-json replay <uuid>` stream, an exact request
-// reuse, a read-only `cake --resume <uuid>` completion, and a tool-less,
-// session-less fallback completion. It never reads or writes Cake session
-// files.
+// `cake --output-format stream-json replay <uuid>` stream and one exact
+// request-reuse completion. It never reads or writes Cake session files.
 package cakecli
 
 import (
@@ -13,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,9 +23,9 @@ var sessionIDPattern = regexp.MustCompile(
 )
 
 const (
-	// defaultMaxReplayBytes bounds the replay stream this tool will buffer. A
-	// suggestion needs only the recent transcript; a session larger than this
-	// should be compacted or continued in a new session.
+	// defaultMaxReplayBytes bounds the replay stream this tool will buffer.
+	// Metadata only needs the head; a session larger than this is likely
+	// corrupt, not merely long.
 	defaultMaxReplayBytes = 64 << 20
 	// maxCompletionBytes bounds one completion JSON document.
 	maxCompletionBytes = 4 << 20
@@ -172,140 +169,16 @@ type Completion struct {
 	Usage  json.RawMessage `json:"usage"`
 }
 
-// ModelOptions describes one isolated suggestion model call.
-type ModelOptions struct {
-	Binary          string
-	Model           string
-	Profile         string
-	ReasoningEffort string
-	SystemPrompt    string
-	OutputSchema    string
-	Transcript      string
-}
-
-// Suggest asks a tool-less, session-less Cake invocation for a suggestion.
-//
-// This is the fallback path. The child runs in a temporary directory with a
-// temporary data root and a temporary Cake config root that contains only the
-// global settings.toml. It therefore cannot pollute the user's sessions,
-// telemetry, project settings, hooks, MCP servers, skills, or toolbox tools.
-// The prompt and schema are written to that directory; the transcript is
-// supplied on stdin.
-func Suggest(ctx context.Context, options ModelOptions) (string, Usage, error) {
-	tempDir, err := os.MkdirTemp("", "cake-suggest-model-*")
-	if err != nil {
-		return "", Usage{}, fmt.Errorf("create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	configRoot, err := isolatedConfigDir(tempDir)
-	if err != nil {
-		return "", Usage{}, err
-	}
-
-	promptPath := filepath.Join(tempDir, "system-prompt.txt")
-	if err := os.WriteFile(promptPath, []byte(options.SystemPrompt), 0o600); err != nil {
-		return "", Usage{}, fmt.Errorf("write system prompt: %w", err)
-	}
-	schemaPath, err := writeOutputSchema(tempDir, options.OutputSchema)
-	if err != nil {
-		return "", Usage{}, err
-	}
-	dataDir := filepath.Join(tempDir, "data")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return "", Usage{}, fmt.Errorf("create temporary cake data directory: %w", err)
-	}
-
-	args := []string{
-		"--no-session",
-		"--no-tools",
-		"--no-skills",
-		"--output-format", "json",
-		"--system-prompt", promptPath,
-		"--output-schema", schemaPath,
-	}
-	if options.Model != "" {
-		args = append(args, "--model", options.Model)
-	}
-	if options.Profile != "" {
-		args = append(args, "--profile", options.Profile)
-	}
-	if options.ReasoningEffort != "" {
-		args = append(args, "--reasoning-effort", options.ReasoningEffort)
-	}
-	args = append(args, "-")
-
-	cmd := exec.CommandContext(ctx, options.Binary, args...)
-	cmd.Dir = tempDir
-	cmd.Env = environmentWith(
-		"CAKE_DATA_DIR", dataDir,
-		"XDG_CONFIG_HOME", configRoot,
-	)
-	cmd.Stdin = strings.NewReader(options.Transcript)
-	return runCompletion(ctx, cmd, "suggestion model call")
-}
-
-// isolatedConfigDir creates a temporary Cake config root with a copy of the
-// user's global settings.toml. The excerpt call needs model and profile
-// definitions, but it must not load global hooks, MCP servers, skills, or
-// toolbox tools.
-func isolatedConfigDir(tempDir string) (string, error) {
-	root := filepath.Join(tempDir, "config")
-	cakeDir := filepath.Join(root, "cake")
-	if err := os.MkdirAll(cakeDir, 0o700); err != nil {
-		return "", fmt.Errorf("create isolated Cake config directory: %w", err)
-	}
-
-	sourceRoot := os.Getenv("XDG_CONFIG_HOME")
-	if sourceRoot == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("cannot locate the home directory: %w", err)
-		}
-		sourceRoot = filepath.Join(home, ".config")
-	}
-	source := filepath.Join(sourceRoot, "cake", "settings.toml")
-	settings, err := os.ReadFile(source)
-	if errors.Is(err, os.ErrNotExist) {
-		return root, nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("read Cake settings %q: %w", source, err)
-	}
-	path := filepath.Join(cakeDir, "settings.toml")
-	if err := os.WriteFile(path, settings, 0o600); err != nil {
-		return "", fmt.Errorf("write isolated Cake settings: %w", err)
-	}
-	return root, nil
-}
-
-// ResumeOptions describes one read-only resumed suggestion call.
-type ResumeOptions struct {
+// ReuseOptions describes one exact request-reuse completion.
+type ReuseOptions struct {
 	Binary           string
 	DataDir          string
 	SessionID        string
 	WorkingDirectory string
 	Model            string
 	Profile          string
-	ReasoningEffort  string
 	OutputSchema     string
 	Instructions     string
-}
-
-// ReuseOptions describes one exact request-reuse or read-only resume call.
-type ReuseOptions = ResumeOptions
-
-// Resume asks a read-only resumed Cake invocation for a suggestion.
-//
-// The child runs in the session's own working directory against the real data
-// root, so it sees the stored conversation and rebuilds the project prompt
-// from that directory. --read-only suppresses records, telemetry, hooks, and
-// the writer lock. --tool-choice none keeps the tool set in the request,
-// preserving the prompt prefix, while forbidding tool calls. The instructions
-// are supplied as a final user message; no system prompt is replaced and no
-// session flag hides the stored history.
-func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
-	return resumedCompletion(ctx, options, false)
 }
 
 // Reuse asks Cake to send the captured next-request body for one suggestion.
@@ -317,14 +190,7 @@ func Resume(ctx context.Context, options ResumeOptions) (string, Usage, error) {
 // unavailable; reuse bypasses project context, so the child then inherits
 // cake-suggest's directory.
 func Reuse(ctx context.Context, options ReuseOptions) (string, Usage, error) {
-	return resumedCompletion(ctx, options, true)
-}
-
-func resumedCompletion(ctx context.Context, options ResumeOptions, reuse bool) (string, Usage, error) {
-	if !reuse && options.WorkingDirectory == "" {
-		return "", Usage{}, errors.New("session has no working directory")
-	}
-	tempDir, err := os.MkdirTemp("", "cake-suggest-resume-*")
+	tempDir, err := os.MkdirTemp("", "cake-suggest-reuse-*")
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("create temporary directory: %w", err)
 	}
@@ -335,24 +201,17 @@ func resumedCompletion(ctx context.Context, options ResumeOptions, reuse bool) (
 		return "", Usage{}, err
 	}
 
-	args := []string{"--resume", options.SessionID}
-	if reuse {
-		args = append(args, "--reuse-last-request")
-	} else {
-		args = append(args, "--read-only", "--tool-choice", "none")
-	}
-	args = append(args,
+	args := []string{
+		"--resume", options.SessionID,
+		"--reuse-last-request",
 		"--output-format", "json",
 		"--output-schema", schemaPath,
-	)
+	}
 	if options.Model != "" {
 		args = append(args, "--model", options.Model)
 	}
 	if options.Profile != "" {
 		args = append(args, "--profile", options.Profile)
-	}
-	if options.ReasoningEffort != "" {
-		args = append(args, "--reasoning-effort", options.ReasoningEffort)
 	}
 	args = append(args, "-")
 
@@ -364,11 +223,7 @@ func resumedCompletion(ctx context.Context, options ResumeOptions, reuse bool) (
 		cmd.Env = environmentWith("CAKE_DATA_DIR", options.DataDir)
 	}
 	cmd.Stdin = strings.NewReader(options.Instructions)
-	label := "read-only resume"
-	if reuse {
-		label = "request reuse"
-	}
-	return runCompletion(ctx, cmd, label)
+	return runCompletion(ctx, cmd, "request reuse")
 }
 
 func writeOutputSchema(dir, schema string) (string, error) {
@@ -497,6 +352,3 @@ func environmentWith(keyValues ...string) []string {
 	}
 	return filtered
 }
-
-var _ io.Writer = (*capBuffer)(nil)
-var _ io.Writer = (*tailBuffer)(nil)

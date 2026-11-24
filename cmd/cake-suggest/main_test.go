@@ -44,10 +44,11 @@ func fakeCakeMain(args []string) int {
 	if hasArg(args, "replay") {
 		return fakeReplay(args)
 	}
-	if hasArg(args, "--resume") {
-		return fakeResumedCall(args)
+	if hasArg(args, "--reuse-last-request") {
+		return fakeReuse(args)
 	}
-	return fakeExcerpt(args)
+	fmt.Fprintln(os.Stderr, "fake cake: unexpected invocation")
+	return 2
 }
 
 func fakeReplay(args []string) int {
@@ -68,21 +69,17 @@ func fakeReplay(args []string) int {
 	return 0
 }
 
-func fakeResumedCall(args []string) int {
-	prefix := "FAKE_RESUME_"
-	if hasArg(args, "--reuse-last-request") {
-		prefix = "FAKE_REUSE_"
-	}
-	if path := os.Getenv(prefix + "ARGS_FILE"); path != "" {
+func fakeReuse(args []string) int {
+	if path := os.Getenv("FAKE_REUSE_ARGS_FILE"); path != "" {
 		writeFile(path, strings.Join(args, "\n"))
 	}
-	if path := os.Getenv(prefix + "STDIN_FILE"); path != "" {
+	if path := os.Getenv("FAKE_REUSE_STDIN_FILE"); path != "" {
 		body, _ := io.ReadAll(os.Stdin)
 		writeFile(path, string(body))
 	} else {
 		_, _ = io.Copy(io.Discard, os.Stdin)
 	}
-	if path := os.Getenv(prefix + "CWD_FILE"); path != "" {
+	if path := os.Getenv("FAKE_REUSE_CWD_FILE"); path != "" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "fake cake: getwd:", err)
@@ -90,50 +87,18 @@ func fakeResumedCall(args []string) int {
 		}
 		writeFile(path, cwd)
 	}
-	if path := os.Getenv(prefix + "SCHEMA_FILE"); path != "" {
+	if path := os.Getenv("FAKE_REUSE_SCHEMA_FILE"); path != "" {
 		copyFlagFile(args, "--output-schema", path)
 	}
-	if path := os.Getenv(prefix + "DATA_DIR_FILE"); path != "" {
+	if path := os.Getenv("FAKE_REUSE_DATA_DIR_FILE"); path != "" {
 		writeFile(path, os.Getenv("CAKE_DATA_DIR"))
 	}
-	if raw := os.Getenv(prefix + "EXIT"); raw != "" {
+	if raw := os.Getenv("FAKE_REUSE_EXIT"); raw != "" {
 		code, _ := strconv.Atoi(raw)
-		fmt.Fprint(os.Stderr, os.Getenv(prefix+"STDERR"))
+		fmt.Fprint(os.Stderr, os.Getenv("FAKE_REUSE_STDERR"))
 		return code
 	}
-	if completion := os.Getenv(prefix + "COMPLETION"); completion != "" {
-		fmt.Print(completion)
-		return 0
-	}
-	document := os.Getenv(prefix + "DOCUMENT")
-	if document == "" {
-		document = os.Getenv("FAKE_SUGGEST_DOCUMENT")
-	}
-	return emitCompletion(document)
-}
-
-func fakeExcerpt(args []string) int {
-	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
-		writeFile(path, strings.Join(args, "\n"))
-	}
-	if path := os.Getenv("FAKE_STDIN_FILE"); path != "" {
-		body, _ := io.ReadAll(os.Stdin)
-		writeFile(path, string(body))
-	} else {
-		_, _ = io.Copy(io.Discard, os.Stdin)
-	}
-	if path := os.Getenv("FAKE_PROMPT_FILE"); path != "" {
-		copyFlagFile(args, "--system-prompt", path)
-	}
-	if path := os.Getenv("FAKE_SCHEMA_FILE"); path != "" {
-		copyFlagFile(args, "--output-schema", path)
-	}
-	if raw := os.Getenv("FAKE_MODEL_EXIT"); raw != "" {
-		code, _ := strconv.Atoi(raw)
-		fmt.Fprint(os.Stderr, os.Getenv("FAKE_MODEL_STDERR"))
-		return code
-	}
-	if completion := os.Getenv("FAKE_COMPLETION"); completion != "" {
+	if completion := os.Getenv("FAKE_REUSE_COMPLETION"); completion != "" {
 		fmt.Print(completion)
 		return 0
 	}
@@ -197,9 +162,6 @@ func writeFile(path, content string) {
 
 func writeFakeCake(t *testing.T) string {
 	t.Helper()
-	// Keep the excerpt's config-isolation copy away from the developer's real
-	// Cake settings.
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	binary, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		t.Fatal(err)
@@ -245,37 +207,28 @@ func captureOutput(t *testing.T, run func() int) (int, string, string) {
 	return code, result.stdout, result.stderr
 }
 
-func replayFixture(workingDir string, lines ...string) string {
-	return replayWithMeta(sessionMeta(workingDir, "test-config"), lines...)
+func replayFixture(workingDir string) string {
+	return strings.Join([]string{
+		sessionMeta(workingDir),
+		`{"type":"task_start","session_id":"` + testID + `","task_id":"` + testTaskID + `"}`,
+		`{"type":"message","role":"user","content":"Add a retry test."}`,
+		`{"type":"message","role":"assistant","content":"I added the test and it passes."}`,
+	}, "\n") + "\n"
 }
 
-func sessionMeta(workingDir, modelConfig string) string {
+func sessionMeta(workingDir string) string {
 	fields := map[string]any{
 		"type":           "session_meta",
 		"format_version": 4,
 		"session_id":     testID,
 		"model":          "test-model",
+		"model_config":   "test-config",
 	}
 	if workingDir != "" {
 		fields["working_directory"] = workingDir
 	}
-	if modelConfig != "" {
-		fields["model_config"] = modelConfig
-	}
 	encoded, _ := json.Marshal(fields)
 	return string(encoded)
-}
-
-func replayWithMeta(meta string, lines ...string) string {
-	base := []string{
-		meta,
-		`{"type":"task_start","session_id":"` + testID + `","task_id":"` + testTaskID + `","timestamp":"2026-11-23T10:00:00Z","model":"test-model","model_config":"test-config"}`,
-		`{"type":"message","role":"user","content":"Add a retry test."}`,
-		`{"type":"message","role":"assistant","content":"I added the test and it passes."}`,
-		`{"type":"function_call","name":"Bash","call_id":"call-1","arguments":"{\"command\":\"go test ./...\"}"}`,
-		`{"type":"function_call_output","call_id":"call-1","output":"ok example.test"}`,
-	}
-	return strings.Join(append(base, lines...), "\n") + "\n"
 }
 
 func writeCapture(t *testing.T, cacheDir string, mutate func(map[string]any)) {
@@ -330,106 +283,6 @@ func documentEnv(t *testing.T, document map[string]any) {
 	t.Setenv("FAKE_SUGGEST_DOCUMENT", string(encoded))
 }
 
-func TestSuggestUsesReadOnlyResume(t *testing.T) {
-	project := t.TempDir()
-	fake := writeFakeCake(t)
-	temp := t.TempDir()
-	resumeArgs := filepath.Join(temp, "resume-args")
-	resumeStdin := filepath.Join(temp, "resume-stdin")
-	resumeCWD := filepath.Join(temp, "resume-cwd")
-	resumeSchema := filepath.Join(temp, "resume-schema")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_RESUME_STDIN_FILE", resumeStdin)
-	t.Setenv("FAKE_RESUME_CWD_FILE", resumeCWD)
-	t.Setenv("FAKE_RESUME_SCHEMA_FILE", resumeSchema)
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-	documentEnv(t, map[string]any{
-		"suggested":  true,
-		"suggestion": "Add a test for the retry path.",
-	})
-
-	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{
-			"suggest",
-			"-json",
-			"-verbose",
-			"-cake-bin", fake,
-			"-data-dir", temp,
-			"-model", "test-config",
-			"-profile", "concise",
-			"-reasoning-effort", "high",
-			"--", testID,
-		})
-	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-	}
-
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("invalid result JSON: %v\n%s", err, stdout)
-	}
-	if !doc.Suggested || doc.Suggestion != "Add a test for the retry path." || doc.SessionID != testID {
-		t.Fatalf("unexpected document: %+v", doc)
-	}
-
-	args := readFile(t, resumeArgs)
-	for _, want := range []string{
-		"--resume\n" + testID,
-		"--read-only",
-		"--tool-choice\nnone",
-		"--output-format\njson",
-		"--output-schema",
-		"--model\ntest-config",
-		"--profile\nconcise",
-		"--reasoning-effort\nhigh",
-		"\n-",
-	} {
-		if !strings.Contains(args, want) {
-			t.Errorf("resume args do not contain %q:\n%s", want, args)
-		}
-	}
-	for _, forbidden := range []string{"--no-session", "--no-tools", "--no-skills", "--system-prompt"} {
-		if strings.Contains(args, forbidden) {
-			t.Errorf("resume args must not contain %q:\n%s", forbidden, args)
-		}
-	}
-	if cwd := readFile(t, resumeCWD); !samePath(t, cwd, project) {
-		t.Errorf("resume cwd = %q, want %q", cwd, project)
-	}
-
-	stdin := readFile(t, resumeStdin)
-	for _, want := range []string{
-		"cake-suggest",
-		"untrusted",
-		"Return only the JSON document",
-		"END OF SUGGESTION REQUEST",
-	} {
-		if !strings.Contains(stdin, want) {
-			t.Errorf("resume stdin does not contain %q:\n%s", want, stdin)
-		}
-	}
-	if strings.Contains(stdin, "USER:\nAdd a retry test.") {
-		t.Error("resume stdin contains the fallback transcript excerpt")
-	}
-	if _, err := os.Stat(excerptArgs); !os.IsNotExist(err) {
-		t.Fatalf("excerpt fallback ran for a successful resume: %v", err)
-	}
-
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(readFile(t, resumeSchema)), &schema); err != nil {
-		t.Fatalf("copied output schema is invalid: %v", err)
-	}
-	if !strings.Contains(stderr, "mode=resume") {
-		t.Errorf("verbose output does not name the resume mode: %s", stderr)
-	}
-	if strings.Contains(stderr, "Add a retry test.") {
-		t.Errorf("verbose output leaked transcript content: %s", stderr)
-	}
-}
-
 func TestSuggestUsesRequestReuse(t *testing.T) {
 	project := t.TempDir()
 	fake := writeFakeCake(t)
@@ -438,8 +291,6 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 	reuseStdin := filepath.Join(temp, "reuse-stdin")
 	reuseCWD := filepath.Join(temp, "reuse-cwd")
 	reuseSchema := filepath.Join(temp, "reuse-schema")
-	resumeArgs := filepath.Join(temp, "resume-args")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
 	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
 	writeCapture(t, temp, func(capture map[string]any) {
 		capture["profile"] = "concise"
@@ -448,8 +299,6 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 	t.Setenv("FAKE_REUSE_STDIN_FILE", reuseStdin)
 	t.Setenv("FAKE_REUSE_CWD_FILE", reuseCWD)
 	t.Setenv("FAKE_REUSE_SCHEMA_FILE", reuseSchema)
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
 	t.Setenv("FAKE_USAGE_JSON", `{"input_tokens":500,"input_tokens_details":{"cached_tokens":321,"cache_write_tokens":12},"output_tokens":50,"total_tokens":550}`)
 	documentEnv(t, map[string]any{
 		"suggested":  true,
@@ -491,7 +340,10 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 			t.Errorf("reuse args do not contain %q:\n%s", want, args)
 		}
 	}
-	for _, forbidden := range []string{"--read-only", "--tool-choice", "--no-session", "--no-tools", "--no-skills", "--system-prompt"} {
+	for _, forbidden := range []string{
+		"--read-only", "--tool-choice", "--reasoning-effort",
+		"--no-session", "--no-tools", "--no-skills", "--system-prompt",
+	} {
 		if strings.Contains(args, forbidden) {
 			t.Errorf("reuse args must not contain %q:\n%s", forbidden, args)
 		}
@@ -503,11 +355,6 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 		!strings.Contains(stdin, "$schema") {
 		t.Errorf("reuse stdin missing the suggestion request or output schema:\n%s", stdin)
 	}
-	for name, path := range map[string]string{"resume": resumeArgs, "excerpt": excerptArgs} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("%s ran after successful reuse: %v", name, err)
-		}
-	}
 	var schema map[string]any
 	if err := json.Unmarshal([]byte(readFile(t, reuseSchema)), &schema); err != nil {
 		t.Fatalf("copied output schema is invalid: %v", err)
@@ -517,9 +364,6 @@ func TestSuggestUsesRequestReuse(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "cached_tokens=321") || !strings.Contains(stderr, "cache_write_tokens=12") {
 		t.Errorf("verbose output does not report cached tokens: %s", stderr)
-	}
-	if strings.Contains(stderr, "Add a retry test.") {
-		t.Errorf("verbose output leaked transcript content: %s", stderr)
 	}
 }
 
@@ -565,55 +409,15 @@ func TestSuggestFindsTheDefaultCacheCapture(t *testing.T) {
 	}
 }
 
-func TestSuggestFallsBackToReadOnlyResume(t *testing.T) {
-	project := t.TempDir()
-	fake := writeFakeCake(t)
-	temp := t.TempDir()
-	reuseArgs := filepath.Join(temp, "reuse-args")
-	resumeArgs := filepath.Join(temp, "resume-args")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-	t.Setenv("FAKE_REUSE_ARGS_FILE", reuseArgs)
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-	documentEnv(t, map[string]any{
-		"suggested":  true,
-		"suggestion": "Add a test for the retry path.",
-	})
-
-	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp, "--", testID})
-	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-	}
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if !doc.Suggested {
-		t.Fatalf("unexpected document: %+v", doc)
-	}
-	if _, err := os.Stat(reuseArgs); !os.IsNotExist(err) {
-		t.Fatalf("reuse ran without a capture: %v", err)
-	}
-	if args := readFile(t, resumeArgs); !strings.Contains(args, "--read-only") {
-		t.Errorf("resume was not attempted:\n%s", args)
-	}
-	if _, err := os.Stat(excerptArgs); !os.IsNotExist(err) {
-		t.Fatalf("excerpt ran after a successful resume: %v", err)
-	}
-	if !strings.Contains(stderr, "mode=resume") || !strings.Contains(stderr, "capture_unavailable") {
-		t.Errorf("verbose output = %s, want mode=resume and capture_unavailable", stderr)
-	}
-}
-
-func TestSuggestRejectsUnusableCaptures(t *testing.T) {
+func TestSuggestNoOpsWhenTheCaptureIsUnusable(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(map[string]any)
-		want   string
+		name      string
+		noCapture bool
+		mutate    func(map[string]any)
+		args      []string
+		want      string
 	}{
+		{name: "missing", noCapture: true, want: "capture_unavailable"},
 		{
 			name: "stale",
 			mutate: func(capture map[string]any) {
@@ -635,27 +439,36 @@ func TestSuggestRejectsUnusableCaptures(t *testing.T) {
 			},
 			want: "capture_incompatible",
 		},
+		{
+			name: "model",
+			args: []string{"-model", "other-model"},
+			want: "capture_incompatible",
+		},
+		{
+			name: "reasoning effort",
+			args: []string{"-reasoning-effort", "high"},
+			want: "cannot be applied",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			project := t.TempDir()
 			fake := writeFakeCake(t)
 			temp := t.TempDir()
 			reuseArgs := filepath.Join(temp, "reuse-args")
-			resumeArgs := filepath.Join(temp, "resume-args")
-			excerptArgs := filepath.Join(temp, "excerpt-args")
-			t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-			writeCapture(t, temp, test.mutate)
+			t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(t.TempDir())))
+			if !test.noCapture {
+				writeCapture(t, temp, test.mutate)
+			}
 			t.Setenv("FAKE_REUSE_ARGS_FILE", reuseArgs)
-			t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-			t.Setenv("FAKE_ARGS_FILE", excerptArgs)
 			documentEnv(t, map[string]any{
 				"suggested":  true,
 				"suggestion": "Add a test for the retry path.",
 			})
 
+			args := append([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp}, test.args...)
+			args = append(args, "--", testID)
 			code, stdout, stderr := captureOutput(t, func() int {
-				return runCLI([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp, "--", testID})
+				return runCLI(args)
 			})
 			if code != 0 {
 				t.Fatalf("exit code = %d, stderr: %s", code, stderr)
@@ -664,332 +477,60 @@ func TestSuggestRejectsUnusableCaptures(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 				t.Fatal(err)
 			}
-			if !doc.Suggested {
-				t.Fatalf("unexpected document: %+v", doc)
+			if doc.Suggested || doc.SessionID != testID || !strings.Contains(doc.Reason, test.want) {
+				t.Fatalf("unexpected document: %+v, want reason %q", doc, test.want)
 			}
 			if _, err := os.Stat(reuseArgs); !os.IsNotExist(err) {
 				t.Fatalf("reuse ran with an unusable capture: %v", err)
 			}
-			if _, err := os.Stat(resumeArgs); err != nil {
-				t.Fatalf("resume did not run: %v", err)
-			}
-			if _, err := os.Stat(excerptArgs); !os.IsNotExist(err) {
-				t.Fatalf("excerpt ran after a successful resume: %v", err)
-			}
-			if !strings.Contains(stderr, "mode=resume") || !strings.Contains(stderr, test.want) {
-				t.Errorf("verbose output = %s, want mode=resume and %s", stderr, test.want)
+			if !strings.Contains(stderr, "mode=none") || !strings.Contains(stderr, test.want) {
+				t.Errorf("verbose output = %s, want mode=none and %s", stderr, test.want)
 			}
 		})
 	}
 }
 
-func TestSuggestReuseCallFailureFallsBackToResume(t *testing.T) {
-	project := t.TempDir()
+func TestSuggestReuseFailureExitsNonzero(t *testing.T) {
 	fake := writeFakeCake(t)
 	temp := t.TempDir()
 	reuseArgs := filepath.Join(temp, "reuse-args")
-	resumeArgs := filepath.Join(temp, "resume-args")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
+	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(t.TempDir())))
 	writeCapture(t, temp, nil)
 	t.Setenv("FAKE_REUSE_ARGS_FILE", reuseArgs)
 	t.Setenv("FAKE_REUSE_EXIT", "1")
 	t.Setenv("FAKE_REUSE_STDERR", "request capture stale")
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-	documentEnv(t, map[string]any{
-		"suggested":  true,
-		"suggestion": "Add a test for the retry path.",
-	})
 
 	code, stdout, stderr := captureOutput(t, func() int {
 		return runCLI([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp, "--", testID})
 	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr)
 	}
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatal(err)
+	if stdout != "" {
+		t.Fatalf("failure wrote stdout: %q", stdout)
 	}
-	if !doc.Suggested {
-		t.Fatalf("unexpected document: %+v", doc)
+	if !strings.Contains(stderr, "request reuse failed") || !strings.Contains(stderr, "request capture stale") {
+		t.Fatalf("stderr = %s", stderr)
 	}
 	if _, err := os.Stat(reuseArgs); err != nil {
 		t.Fatalf("reuse was not attempted: %v", err)
 	}
-	if _, err := os.Stat(resumeArgs); err != nil {
-		t.Fatalf("resume did not run after reuse failed: %v", err)
-	}
-	if _, err := os.Stat(excerptArgs); !os.IsNotExist(err) {
-		t.Fatalf("excerpt ran after a successful resume: %v", err)
-	}
-	if !strings.Contains(stderr, "mode=resume") ||
-		!strings.Contains(stderr, "request reuse failed") ||
-		!strings.Contains(stderr, "request capture stale") {
-		t.Errorf("verbose output = %s, want the reuse failure and resume mode", stderr)
-	}
-}
-
-func TestSuggestReuseNoOpDoesNotFallBack(t *testing.T) {
-	project := t.TempDir()
-	fake := writeFakeCake(t)
-	temp := t.TempDir()
-	resumeArgs := filepath.Join(temp, "resume-args")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-	writeCapture(t, temp, nil)
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-	documentEnv(t, map[string]any{
-		"suggested": false,
-		"reason":    "The work is complete.",
-	})
-
-	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp, "--", testID})
-	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-	}
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if doc.Suggested || doc.Reason != "The work is complete." {
-		t.Fatalf("unexpected document: %+v", doc)
-	}
-	for name, path := range map[string]string{"resume": resumeArgs, "excerpt": excerptArgs} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("%s ran after a valid reuse no-op: %v", name, err)
-		}
-	}
-	if !strings.Contains(stderr, "mode=reuse") {
-		t.Errorf("verbose output does not name the reuse mode: %s", stderr)
-	}
-}
-
-func TestSuggestReuseAndResumeFailureFallsBackToExcerpt(t *testing.T) {
-	project := t.TempDir()
-	fake := writeFakeCake(t)
-	temp := t.TempDir()
-	reuseArgs := filepath.Join(temp, "reuse-args")
-	resumeArgs := filepath.Join(temp, "resume-args")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-	writeCapture(t, temp, nil)
-	t.Setenv("FAKE_REUSE_ARGS_FILE", reuseArgs)
-	t.Setenv("FAKE_REUSE_EXIT", "1")
-	t.Setenv("FAKE_REUSE_STDERR", "request capture stale")
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_RESUME_EXIT", "1")
-	t.Setenv("FAKE_RESUME_STDERR", "resume unavailable")
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-	documentEnv(t, map[string]any{
-		"suggested":  true,
-		"suggestion": "Add a test for the retry path.",
-	})
-
-	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp, "--", testID})
-	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-	}
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if !doc.Suggested {
-		t.Fatalf("unexpected document: %+v", doc)
-	}
-	for name, path := range map[string]string{"reuse": reuseArgs, "resume": resumeArgs, "excerpt": excerptArgs} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("%s call did not run: %v", name, err)
-		}
-	}
-	for _, want := range []string{"mode=excerpt", "request reuse failed", "read-only resume failed", "request capture stale", "resume unavailable"} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("verbose output does not contain %q: %s", want, stderr)
-		}
-	}
-}
-
-func TestSuggestFallsBackToTheExcerpt(t *testing.T) {
-	project := t.TempDir()
-	fake := writeFakeCake(t)
-	temp := t.TempDir()
-	resumeArgs := filepath.Join(temp, "resume-args")
-	resumeStdin := filepath.Join(temp, "resume-stdin")
-	excerptArgs := filepath.Join(temp, "excerpt-args")
-	excerptStdin := filepath.Join(temp, "excerpt-stdin")
-	promptPath := filepath.Join(temp, "prompt")
-	schemaPath := filepath.Join(temp, "schema")
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_RESUME_STDIN_FILE", resumeStdin)
-	t.Setenv("FAKE_RESUME_EXIT", "1")
-	t.Setenv("FAKE_RESUME_STDERR", "error: unexpected argument '--read-only' found")
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-	t.Setenv("FAKE_STDIN_FILE", excerptStdin)
-	t.Setenv("FAKE_PROMPT_FILE", promptPath)
-	t.Setenv("FAKE_SCHEMA_FILE", schemaPath)
-	documentEnv(t, map[string]any{
-		"suggested":  true,
-		"suggestion": "Add a test for the retry path.",
-	})
-
-	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{
-			"suggest", "-json", "-verbose",
-			"-cake-bin", fake,
-			"-data-dir", temp,
-			"--", testID,
-		})
-	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-	}
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("invalid result JSON: %v\n%s", err, stdout)
-	}
-	if !doc.Suggested || doc.Suggestion != "Add a test for the retry path." {
-		t.Fatalf("unexpected document: %+v", doc)
-	}
-
-	if args := readFile(t, resumeArgs); !strings.Contains(args, "--read-only") {
-		t.Errorf("resume was not attempted:\n%s", args)
-	}
-	if stdin := readFile(t, resumeStdin); !strings.Contains(stdin, "END OF SUGGESTION REQUEST") {
-		t.Errorf("resume stdin missing the suggestion request:\n%s", stdin)
-	}
-	excerpt := readFile(t, excerptArgs)
-	for _, want := range []string{
-		"--no-session", "--no-tools", "--no-skills",
-		"--output-format\njson", "--system-prompt", "--output-schema", "\n-",
-	} {
-		if !strings.Contains(excerpt, want) {
-			t.Errorf("excerpt args do not contain %q:\n%s", want, excerpt)
-		}
-	}
-	if strings.Contains(excerpt, "--resume") {
-		t.Errorf("excerpt args must not resume the session:\n%s", excerpt)
-	}
-	if stdin := readFile(t, excerptStdin); !strings.Contains(stdin, "USER:\nAdd a retry test.") ||
-		!strings.Contains(stdin, "END OF TRANSCRIPT") {
-		t.Errorf("excerpt stdin is missing the bounded transcript:\n%s", stdin)
-	}
-	if prompt := readFile(t, promptPath); !strings.Contains(strings.ToLower(prompt), "untrusted") {
-		t.Errorf("excerpt system prompt does not call the transcript untrusted")
-	}
-
-	if !strings.Contains(stderr, "mode=excerpt") || !strings.Contains(stderr, "fallback:") {
-		t.Errorf("verbose output does not name the fallback: %s", stderr)
-	}
-	if !strings.Contains(stderr, "unexpected argument") {
-		t.Errorf("verbose output lost the fallback reason: %s", stderr)
-	}
-	if strings.Contains(stderr, "Add a retry test.") {
-		t.Errorf("verbose output leaked transcript content: %s", stderr)
-	}
-}
-
-func TestSuggestSkipsResumeWhenItCannotRun(t *testing.T) {
-	cases := []struct {
-		name         string
-		workingDir   func(t *testing.T) string
-		modelConfig  string
-		modelFlag    string
-		wantFallback string
-	}{
-		{
-			name:         "missing working directory",
-			modelConfig:  "test-config",
-			wantFallback: "no working directory",
-		},
-		{
-			name:         "relative working directory",
-			workingDir:   func(*testing.T) string { return "relative/project" },
-			modelConfig:  "test-config",
-			wantFallback: "not absolute",
-		},
-		{
-			name:         "model mismatch",
-			workingDir:   func(t *testing.T) string { return t.TempDir() },
-			modelConfig:  "session-model",
-			modelFlag:    "other-model",
-			wantFallback: "differs",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fake := writeFakeCake(t)
-			temp := t.TempDir()
-			resumeArgs := filepath.Join(temp, "resume-args")
-			excerptArgs := filepath.Join(temp, "excerpt-args")
-			excerptStdin := filepath.Join(temp, "excerpt-stdin")
-			workingDir := ""
-			if tc.workingDir != nil {
-				workingDir = tc.workingDir(t)
-			}
-			meta := sessionMeta(workingDir, tc.modelConfig)
-			t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayWithMeta(meta)))
-			t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-			t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-			t.Setenv("FAKE_STDIN_FILE", excerptStdin)
-			documentEnv(t, map[string]any{
-				"suggested":  true,
-				"suggestion": "Add a test for the retry path.",
-			})
-
-			args := []string{"suggest", "-json", "-verbose", "-cake-bin", fake, "-data-dir", temp}
-			if tc.modelFlag != "" {
-				args = append(args, "-model", tc.modelFlag)
-			}
-			args = append(args, "--", testID)
-			code, stdout, stderr := captureOutput(t, func() int { return runCLI(args) })
-			if code != 0 {
-				t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-			}
-			var doc suggest.Document
-			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-				t.Fatalf("invalid result JSON: %v\n%s", err, stdout)
-			}
-			if !doc.Suggested {
-				t.Fatalf("unexpected document: %+v", doc)
-			}
-			if _, err := os.Stat(resumeArgs); !os.IsNotExist(err) {
-				t.Fatalf("resume ran when it should have been skipped: %v", err)
-			}
-			if stdin := readFile(t, excerptStdin); !strings.Contains(stdin, "USER:\nAdd a retry test.") {
-				t.Errorf("excerpt stdin is missing the bounded transcript:\n%s", stdin)
-			}
-			if !strings.Contains(stderr, "mode=excerpt") || !strings.Contains(stderr, tc.wantFallback) {
-				t.Errorf("verbose output = %s, want fallback %q", stderr, tc.wantFallback)
-			}
-			if tc.modelFlag != "" && !strings.Contains(readFile(t, excerptArgs), "-model\n"+tc.modelFlag) {
-				t.Errorf("excerpt did not honor the requested model:\n%s", readFile(t, excerptArgs))
-			}
-		})
-	}
 }
 
 func TestSuggestNoOp(t *testing.T) {
-	project := t.TempDir()
 	fake := writeFakeCake(t)
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(project)))
-	argsPath := filepath.Join(t.TempDir(), "resume-args")
-	excerptPath := filepath.Join(t.TempDir(), "excerpt-args")
-	t.Setenv("FAKE_RESUME_ARGS_FILE", argsPath)
-	t.Setenv("FAKE_ARGS_FILE", excerptPath)
+	temp := t.TempDir()
+	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(t.TempDir())))
+	writeCapture(t, temp, nil)
+	argsPath := filepath.Join(t.TempDir(), "reuse-args")
+	t.Setenv("FAKE_REUSE_ARGS_FILE", argsPath)
 	documentEnv(t, map[string]any{
 		"suggested": false,
 		"reason":    "The work is complete.",
 	})
 
 	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-cake-bin", fake, "--", testID})
+		return runCLI([]string{"suggest", "-json", "-cake-bin", fake, "-data-dir", temp, "--", testID})
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
@@ -1004,54 +545,17 @@ func TestSuggestNoOp(t *testing.T) {
 	if args := readFile(t, argsPath); strings.Contains(args, "--reasoning-effort") {
 		t.Errorf("empty reasoning effort emitted a flag:\n%s", args)
 	}
-	if _, err := os.Stat(excerptPath); !os.IsNotExist(err) {
-		t.Fatalf("a valid no-op fell back to the excerpt: %v", err)
-	}
-}
-
-func TestSuggestNoConversationSkipsTheModel(t *testing.T) {
-	fake := writeFakeCake(t)
-	project := t.TempDir()
-	replay := strings.Join([]string{
-		sessionMeta(project, "test-config"),
-		`{"type":"turn_usage","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
-	}, "\n") + "\n"
-	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replay))
-	resumeArgs := filepath.Join(t.TempDir(), "resume-args")
-	excerptArgs := filepath.Join(t.TempDir(), "excerpt-args")
-	t.Setenv("FAKE_RESUME_ARGS_FILE", resumeArgs)
-	t.Setenv("FAKE_ARGS_FILE", excerptArgs)
-
-	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-verbose", "-cake-bin", fake, "--", testID})
-	})
-	if code != 0 {
-		t.Fatalf("exit code = %d, stderr: %s", code, stderr)
-	}
-	var doc suggest.Document
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if doc.Suggested || !strings.Contains(doc.Reason, "no user or assistant") {
-		t.Fatalf("unexpected document: %+v", doc)
-	}
-	if !strings.Contains(stderr, "mode=none") {
-		t.Errorf("verbose output does not name the no-call mode: %s", stderr)
-	}
-	for name, path := range map[string]string{"resume": resumeArgs, "excerpt": excerptArgs} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("%s model call ran for an empty transcript: %v", name, err)
-		}
-	}
 }
 
 func TestSuggestRejectsInvalidModelDocument(t *testing.T) {
 	fake := writeFakeCake(t)
+	temp := t.TempDir()
 	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(t.TempDir())))
+	writeCapture(t, temp, nil)
 	documentEnv(t, map[string]any{"suggestion": "Add a test."})
 
 	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-cake-bin", fake, "--", testID})
+		return runCLI([]string{"suggest", "-json", "-cake-bin", fake, "-data-dir", temp, "--", testID})
 	})
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1; stdout: %s; stderr: %s", code, stdout, stderr)
@@ -1085,14 +589,16 @@ func TestSuggestRejectsReplayFailure(t *testing.T) {
 
 func TestSuggestSanitizesTheModelText(t *testing.T) {
 	fake := writeFakeCake(t)
+	temp := t.TempDir()
 	t.Setenv("FAKE_REPLAY_FILE", writeReplay(t, replayFixture(t.TempDir())))
+	writeCapture(t, temp, nil)
 	documentEnv(t, map[string]any{
 		"suggested":  true,
 		"suggestion": "  \"Add\n a test.\"  ",
 	})
 
 	code, stdout, stderr := captureOutput(t, func() int {
-		return runCLI([]string{"suggest", "-json", "-cake-bin", fake, "--", testID})
+		return runCLI([]string{"suggest", "-json", "-cake-bin", fake, "-data-dir", temp, "--", testID})
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr: %s", code, stderr)

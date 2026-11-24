@@ -2,11 +2,10 @@
 // session.
 //
 // It reads the session metadata through Cake's read-only replay stream and
-// first asks Cake to reuse the exact request captured after the completed
-// turn. If that cannot run, it resumes the session read-only. If neither can
-// run, it falls back to one isolated, tool-less Cake model call over a bounded
-// transcript excerpt. It never writes to the session and never reads Cake
-// session files.
+// asks Cake to reuse the exact request captured after the completed turn. If
+// the capture cannot be reused it reports a no-op with a reason; it never
+// rebuilds the request from a resume or a transcript excerpt. It never writes
+// to the session and never reads Cake session files.
 package main
 
 import (
@@ -63,19 +62,23 @@ Usage:
   cake-suggest help | -h | --help
 
 The session is read through Cake's read-only replay stream. The suggestion
-call first reuses the exact provider request captured after the completed
-turn, preserving its tool choice, then falls back to a read-only resume with
-tool choice none, then to a bounded replay excerpt. Reuse and resume never
-append to the session. Nothing is written to the session.
+call reuses the exact provider request captured after the completed turn,
+preserving its system prompt, tools, history, and tool choice. It never
+appends to the session and nothing is written to the session.
+
+When the capture is missing, stale, or incompatible with the requested model
+or profile, the run is a no-op with a reason. Replay and model-call failures
+exit nonzero.
 
 Flags:
   -cake-bin <path>             cake executable (default: $CAKE_BIN or cake)
   -data-dir <path>             cake data root (default: $CAKE_DATA_DIR or ~/.local/share/cake)
-  -model <name>                model for the suggestion call
-  -profile <name>              profile for the suggestion call
-  -reasoning-effort <effort>   reasoning effort (none, low, medium, high, xhigh, max)
+  -model <name>                model for the suggestion; must match the capture
+  -profile <name>              profile for the suggestion; must match the capture
+  -reasoning-effort <effort>   accepted for caller compatibility; a non-empty
+                               value makes the run a no-op because a reused
+                               request cannot be reshaped
   -timeout <duration>          whole-request deadline (default 50s)
-  -max-transcript-chars <n>    fallback transcript excerpt bound (default 20000)
   -max-replay-bytes <n>        replay stream bound (default 67108864)
   -json                        emit one JSON document
   -verbose                     print content-free timings and usage (including cached tokens) on stderr
@@ -96,7 +99,7 @@ Version output:
 
 Examples:
   cake-suggest suggest -json -- 01234567-89ab-4cde-8f01-23456789abcd
-  cake-suggest suggest -model fast -profile concise -reasoning-effort low -json -- <session-id>
+  cake-suggest suggest -json -verbose -model fast -- <session-id>
 `)
 }
 
@@ -110,18 +113,16 @@ func commandSuggest(args []string) int {
 		profile         string
 		reasoningEffort string
 		timeout         time.Duration
-		maxTranscript   int
 		maxReplayBytes  int64
 		jsonOut         bool
 		verbose         bool
 	)
 	fs.StringVar(&cakeBin, "cake-bin", "", "cake executable")
 	fs.StringVar(&dataDir, "data-dir", "", "cake data root")
-	fs.StringVar(&model, "model", "", "model for the suggestion call")
-	fs.StringVar(&profile, "profile", "", "profile for the suggestion call")
-	fs.StringVar(&reasoningEffort, "reasoning-effort", "", "reasoning effort for the suggestion call")
+	fs.StringVar(&model, "model", "", "model for the suggestion; must match the capture")
+	fs.StringVar(&profile, "profile", "", "profile for the suggestion; must match the capture")
+	fs.StringVar(&reasoningEffort, "reasoning-effort", "", "accepted for compatibility; a non-empty value makes the run a no-op")
 	fs.DurationVar(&timeout, "timeout", defaultTimeout, "whole-request deadline")
-	fs.IntVar(&maxTranscript, "max-transcript-chars", 20_000, "fallback transcript excerpt bound")
 	fs.Int64Var(&maxReplayBytes, "max-replay-bytes", defaultReplayBytes, "replay stream bound")
 	fs.BoolVar(&jsonOut, "json", false, "emit one JSON document")
 	fs.BoolVar(&verbose, "verbose", false, "print timings and usage on stderr")
@@ -141,10 +142,6 @@ func commandSuggest(args []string) int {
 		fmt.Fprintln(os.Stderr, "-timeout must be positive")
 		return 2
 	}
-	if maxTranscript <= 0 {
-		fmt.Fprintln(os.Stderr, "-max-transcript-chars must be positive")
-		return 2
-	}
 	if maxReplayBytes <= 0 {
 		fmt.Fprintln(os.Stderr, "-max-replay-bytes must be positive")
 		return 2
@@ -156,14 +153,13 @@ func commandSuggest(args []string) int {
 	defer cancel()
 
 	result, err := suggest.Run(ctx, suggest.Options{
-		CakeBin:            cakeBin,
-		DataDir:            dataDir,
-		SessionID:          sessionID,
-		Model:              model,
-		Profile:            profile,
-		ReasoningEffort:    reasoningEffort,
-		MaxTranscriptChars: maxTranscript,
-		MaxReplayBytes:     maxReplayBytes,
+		CakeBin:         cakeBin,
+		DataDir:         dataDir,
+		SessionID:       sessionID,
+		Model:           model,
+		Profile:         profile,
+		ReasoningEffort: reasoningEffort,
+		MaxReplayBytes:  maxReplayBytes,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cake-suggest:", err)
@@ -172,11 +168,8 @@ func commandSuggest(args []string) int {
 
 	if verbose {
 		fmt.Fprintf(os.Stderr,
-			"cake-suggest: mode=%s entries=%d chars=%d omitted=%d replay_ms=%d model_ms=%d tokens_in=%d tokens_out=%d cached_tokens=%d cache_write_tokens=%d\n",
+			"cake-suggest: mode=%s replay_ms=%d model_ms=%d tokens_in=%d tokens_out=%d cached_tokens=%d cache_write_tokens=%d\n",
 			result.Mode,
-			result.TranscriptEntries,
-			result.TranscriptChars,
-			result.OmittedEntries,
 			result.ReplayElapsed.Milliseconds(),
 			result.ModelElapsed.Milliseconds(),
 			result.Usage.InputTokens,
@@ -184,8 +177,8 @@ func commandSuggest(args []string) int {
 			result.Usage.InputTokensDetails.CachedTokens,
 			result.Usage.InputTokensDetails.CacheWriteTokens,
 		)
-		if result.FallbackReason != "" {
-			fmt.Fprintf(os.Stderr, "cake-suggest: fallback: %s\n", result.FallbackReason)
+		if !result.Suggested && result.Reason != "" {
+			fmt.Fprintf(os.Stderr, "cake-suggest: reason: %s\n", result.Reason)
 		}
 	}
 
