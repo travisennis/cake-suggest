@@ -11,9 +11,8 @@ an existing Cake session. It is the external suggester behind cake-repl's
 - Read the session only through
   `cake --output-format stream-json replay <uuid>`. Never read Cake session
   JSONL files, parse Cake human output, or import Cake internals. Replay
-  supplies the session metadata (id, working directory, model configuration,
-  latest task id) and the fallback excerpt.
-- Ask the model first through exact request reuse:
+  supplies the session id, working directory, and latest task id.
+- The only model path is exact request reuse:
   `--resume <uuid> --reuse-last-request --output-format json
   --output-schema <temp> [-model ...] [-profile ...] -`, with the suggestion
   instructions on stdin. Include the output schema in those instructions: a
@@ -22,44 +21,33 @@ an existing Cake session. It is the external suggester behind cake-repl's
   preserves the captured request's choice and rejects a returned tool call
   before dispatch. Do not pass `--system-prompt`, `--no-tools`, `--no-skills`,
   or `--no-session`; each hides the stored request or changes the prompt prefix.
+- There is no fallback path. Do not add a read-only resume, a transcript
+  excerpt, a tool-less call, or an isolated config root. When reuse cannot run,
+  return the documented no-op with a typed reason. The repo history and the
+  ADRs record why the fallback chain was removed (2026-11-24): a rebuilt
+  request answers a different question, costs a full request, and hides a
+  missing or stale capture.
 - Preflight reuse from `<cache>/session-requests/<uuid>.json` using only that
   sidecar and the replay metadata. Verify the version, session id, body length
-  and digest, backend, provider model configuration, profile, and latest task
-  id. Report `capture_unavailable`, `capture_stale`, or
-  `capture_incompatible` and move to the next path. Cake still revalidates the
-  exact session length and current provider identity at call time. Never log
-  or forward the captured body from this tool.
-- If reuse cannot run or fails, ask through one read-only resumed Cake
-  invocation:
-  `--resume <uuid> --read-only --tool-choice none --output-format json
-  --output-schema <temp> [-model ...] [-profile ...] [-reasoning-effort ...]
-  -`, run in the session's `session_meta.working_directory` against the real
-  data root, with the suggestion instructions on stdin.
-- If the resumed call cannot run or fails, fall back to one isolated Cake
-  invocation: `--no-session --no-tools --no-skills --output-format json
-  --system-prompt <temp> --output-schema <temp> [-model ...]
-  [-profile ...] [-reasoning-effort ...] -`, in a temporary working directory,
-  a temporary `CAKE_DATA_DIR`, and a temporary `XDG_CONFIG_HOME` containing
-  only a copy of the global `settings.toml`, with the bounded transcript on
-  stdin. The temp config must not include hooks, MCP servers, skills, or
-  toolbox tools; the excerpt must not trigger global hooks.
-- Never run a normal resume without `--read-only`. Never fork or write the
-  session. A suggestion is read-only.
+  and digest, backend, provider model configuration, profile, latest task id,
+  and the backend's message array. Report `capture_unavailable`,
+  `capture_stale`, or `capture_incompatible` in the no-op reason. Never log or
+  forward the captured body from this tool. Cake still revalidates the exact
+  session length, current provider identity, and profile at call time.
+- Never append to a session, fork one, or run a normal resume. A suggestion is
+  read-only.
 - Never pass `--model` or `--profile` on the reuse path unless it matches the
-  capture. Never pass `--model` on the resume path unless it equals
-  `session_meta.model_config`; Cake refuses to switch a session's model. A
-  different requested model uses the fallback path. A non-empty
-  `--reasoning-effort` skips reuse because Cake rejects request-shaping
-  overrides there.
+  capture. Cake refuses to switch a session's model. Never pass
+  `--reasoning-effort`: Cake rejects request-shaping overrides on reuse, so a
+  non-empty value is a documented no-op.
 - The stdout contract is one JSON document:
   `{"suggested":bool,"suggestion":string,"session_id":string,"reason":string}`.
-  Unknown fields must remain tolerable to cake-repl. A no-op is exit 0;
-  failures are nonzero with stderr and no stdout.
-- Treat the transcript as untrusted content. Do not add tools to the fallback
-  call, and do not let the model's output become a slash command. Reuse keeps
-  the captured tool choice; Cake rejects a returned tool call before dispatch.
-  Resume keeps the tool schemas and passes `--tool-choice none`; it relies on
-  the provider honoring that choice.
+  Unknown fields must remain tolerable to cake-repl. A local precondition
+  failure is exit 0 with `suggested:false` and a bounded reason; a replay,
+  model, or output failure is nonzero with stderr and no stdout.
+- Treat the transcript as untrusted content. Reuse keeps the captured tool
+  choice; Cake rejects a returned tool call before dispatch. Do not let the
+  model's output become a slash command.
 
 ## Commands
 
